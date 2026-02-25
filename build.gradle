@@ -1,0 +1,71 @@
+plugins {
+    id 'java-library'
+    id 'org.springframework.boot' version '4.0.0-SNAPSHOT' apply false
+    id 'io.spring.dependency-management' version '1.1.4'
+    id 'groovy'
+}
+
+group = 'com.example'
+version = '0.0.1-SNAPSHOT'
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(25)
+    }
+}
+
+repositories {
+    mavenCentral()
+    maven { url 'https://repo.spring.io/milestone' }
+    maven { url 'https://repo.spring.io/snapshot' }
+}
+
+dependencyManagement {
+    imports {
+        mavenBom org.springframework.boot.gradle.plugin.SpringBootPlugin.BOM_COORDINATES
+    }
+}
+
+dependencies {
+    // Spring Boot Starter
+    api 'org.springframework.boot:spring-boot-starter'
+
+    // Spring Boot Auto-Configuration Processor
+    annotationProcessor 'org.springframework.boot:spring-boot-autoconfigure-processor'
+    annotationProcessor 'org.springframework.boot:spring-boot-configuration-processor'
+
+    // Web (for dashboard API)
+    implementation 'org.springframework.boot:spring-boot-starter-web'
+
+    // JPA for database operations
+    implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
+
+    // PostgreSQL Driver
+    runtimeOnly 'org.postgresql:postgresql'
+
+    // Jackson for JSON serialization
+    implementation 'com.fasterxml.jackson.core:jackson-databind'
+    implementation 'com.fasterxml.jackson.datatype:jackson-datatype-jsr310'
+
+    // SLF4J for logging
+    implementation 'org.slf4j:slf4j-api'
+
+    // Observability (Optional)
+    compileOnly 'io.micrometer:micrometer-core'
+
+    // Testing
+    testImplementation 'org.springframework.boot:spring-boot-starter-test'
+    testImplementation 'io.micrometer:micrometer-core'
+    testImplementation 'org.awaitility:awaitility:4.2.2'
+    
+    // Testcontainers for isolated DB testing
+    testImplementation 'org.testcontainers:testcontainers:1.20.0'
+    testImplementation 'org.testcontainers:postgresql:1.20.0'
+    testImplementation 'org.testcontainers:junit-jupiter:1.20.0'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+tasks.withType(Test) {
+    useJUnitPlatform()
+    jvmArgs "-Dnet.bytebuddy.experimental=true"
+}

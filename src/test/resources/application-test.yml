@@ -1,0 +1,14 @@
+spring:
+  datasource:
+    url: jdbc:postgresql://${testcontainers.postgresql.host}:${testcontainers.postgresql.port}/${testcontainers.postgresql.database}
+    username: ${testcontainers.postgresql.username}
+    password: ${testcontainers.postgresql.password}
+    driver-class-name: org.postgresql.Driver
+
+jobq:
+  polling:
+    delay: 500 # Poll every 500ms for faster tests
+
+logging:
+  level:
+    com.jobq: DEBUG
