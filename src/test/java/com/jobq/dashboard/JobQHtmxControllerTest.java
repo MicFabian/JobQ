@@ -31,6 +31,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class JobQHtmxControllerTest {
 
@@ -50,10 +51,28 @@ class JobQHtmxControllerTest {
 
     @Test
     void shouldReturnHtmlForStats() throws Exception {
-        when(jobRepository.countPendingJobs()).thenReturn(1L);
-        when(jobRepository.countProcessingJobs()).thenReturn(0L);
-        when(jobRepository.countCompletedJobs()).thenReturn(0L);
-        when(jobRepository.countFailedJobs()).thenReturn(0L);
+        JobRepository.LifecycleCounts counts = new JobRepository.LifecycleCounts() {
+            @Override
+            public Long getPendingCount() {
+                return 1L;
+            }
+
+            @Override
+            public Long getProcessingCount() {
+                return 0L;
+            }
+
+            @Override
+            public Long getCompletedCount() {
+                return 0L;
+            }
+
+            @Override
+            public Long getFailedCount() {
+                return 0L;
+            }
+        };
+        when(jobRepository.countLifecycleCounts()).thenReturn(counts);
 
         mockMvc.perform(get("/jobq/htmx/stats"))
                 .andExpect(status().isOk())
@@ -79,6 +98,21 @@ class JobQHtmxControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(content().string(containsString("com.example.TestJob")))
                 .andExpect(content().string(containsString("1 / 3")));
+    }
+
+    @Test
+    void shouldClampInvalidPageAndSizeValues() throws Exception {
+        when(jobRepository.findAll(any(Pageable.class))).thenReturn(Page.empty());
+
+        mockMvc.perform(get("/jobq/htmx/jobs").param("page", "-7").param("size", "100000"))
+                .andExpect(status().isOk());
+
+        ArgumentCaptor<Pageable> pageableCaptor = ArgumentCaptor.forClass(Pageable.class);
+        verify(jobRepository).findAll(pageableCaptor.capture());
+        Pageable pageable = pageableCaptor.getValue();
+        assertEquals(0, pageable.getPageNumber());
+        assertEquals(200, pageable.getPageSize());
+        assertTrue(pageable.getSort().isSorted());
     }
 
     @Test

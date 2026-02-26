@@ -12,6 +12,7 @@ import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import java.util.Base64;
 
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -24,6 +25,7 @@ class JobQDashboardSecurityTest {
     @BeforeEach
     void setUp() {
         jobRepository = mock(JobRepository.class);
+        when(jobRepository.countLifecycleCounts()).thenReturn(zeroCounts());
 
         JobQProperties properties = new JobQProperties();
         properties.getDashboard().setUsername("admin");
@@ -38,6 +40,30 @@ class JobQDashboardSecurityTest {
         return MockMvcBuilders.standaloneSetup(controller)
                 .addInterceptors(authInterceptor)
                 .build();
+    }
+
+    private JobRepository.LifecycleCounts zeroCounts() {
+        return new JobRepository.LifecycleCounts() {
+            @Override
+            public Long getPendingCount() {
+                return 0L;
+            }
+
+            @Override
+            public Long getProcessingCount() {
+                return 0L;
+            }
+
+            @Override
+            public Long getCompletedCount() {
+                return 0L;
+            }
+
+            @Override
+            public Long getFailedCount() {
+                return 0L;
+            }
+        };
     }
 
     @Test

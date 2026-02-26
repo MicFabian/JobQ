@@ -5,6 +5,7 @@ import com.jobq.JobRepository;
 import com.jobq.JobWorker;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ListableBeanFactory;
 import org.springframework.context.SmartLifecycle;
 import org.springframework.core.annotation.AnnotationUtils;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -13,7 +14,9 @@ import org.springframework.stereotype.Component;
 import org.springframework.util.ClassUtils;
 
 import java.time.OffsetDateTime;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 /**
@@ -27,25 +30,68 @@ public class RecurringJobInitializer implements SmartLifecycle {
 
     private final JobRepository jobRepository;
     private final List<JobWorker<?>> workers;
+    private final ListableBeanFactory beanFactory;
     private boolean running = false;
 
-    public RecurringJobInitializer(JobRepository jobRepository, List<JobWorker<?>> workers) {
+    public RecurringJobInitializer(
+            JobRepository jobRepository,
+            List<JobWorker<?>> workers,
+            ListableBeanFactory beanFactory) {
         this.jobRepository = jobRepository;
         this.workers = workers;
+        this.beanFactory = beanFactory;
     }
 
     @Override
     public void start() {
         log.info("Checking for recurring jobs to bootstrap...");
+        Map<String, RecurringDefinition> recurringJobs = new LinkedHashMap<>();
+
         for (JobWorker<?> worker : workers) {
-            Class<?> targetClass = ClassUtils.getUserClass(worker);
-            com.jobq.annotation.Job jobAnnotation = AnnotationUtils.findAnnotation(targetClass,
-                    com.jobq.annotation.Job.class);
+            com.jobq.annotation.Job jobAnnotation = findJobAnnotation(worker);
             if (jobAnnotation != null && !jobAnnotation.cron().isBlank()) {
-                bootstrapRecurringJob(worker.getJobType(), jobAnnotation.cron(), jobAnnotation.maxRetries());
+                registerRecurringDefinition(recurringJobs, worker.getJobType(), jobAnnotation);
             }
         }
+
+        Map<String, Object> annotatedBeans = beanFactory.getBeansWithAnnotation(com.jobq.annotation.Job.class);
+        for (Object bean : annotatedBeans.values()) {
+            if (bean instanceof JobWorker<?>) {
+                continue;
+            }
+            com.jobq.annotation.Job jobAnnotation = findJobAnnotation(bean);
+            if (jobAnnotation == null || jobAnnotation.cron().isBlank()) {
+                continue;
+            }
+            String type = jobAnnotation.value() == null ? "" : jobAnnotation.value().trim();
+            if (type.isBlank()) {
+                throw new IllegalStateException("@Job value must not be blank on " + ClassUtils.getUserClass(bean).getName());
+            }
+            registerRecurringDefinition(recurringJobs, type, jobAnnotation);
+        }
+
+        for (RecurringDefinition recurringDefinition : recurringJobs.values()) {
+            bootstrapRecurringJob(recurringDefinition.type(), recurringDefinition.cron(), recurringDefinition.maxRetries());
+        }
+
         this.running = true;
+    }
+
+    private void registerRecurringDefinition(
+            Map<String, RecurringDefinition> recurringJobs,
+            String type,
+            com.jobq.annotation.Job jobAnnotation) {
+        RecurringDefinition definition = new RecurringDefinition(type, jobAnnotation.cron(), jobAnnotation.maxRetries());
+        RecurringDefinition existing = recurringJobs.putIfAbsent(type, definition);
+        if (existing != null && (!existing.cron().equals(definition.cron()) || existing.maxRetries() != definition.maxRetries())) {
+            throw new IllegalStateException(
+                    "Recurring job type '" + type + "' is configured multiple times with different cron/retry settings.");
+        }
+    }
+
+    private com.jobq.annotation.Job findJobAnnotation(Object bean) {
+        Class<?> targetClass = ClassUtils.getUserClass(bean);
+        return AnnotationUtils.findAnnotation(targetClass, com.jobq.annotation.Job.class);
     }
 
     private void bootstrapRecurringJob(String type, String cronExpression, int maxRetries) {
@@ -95,5 +141,8 @@ public class RecurringJobInitializer implements SmartLifecycle {
 
     private String recurringReplaceKey(String cronExpression) {
         return "__jobq_recurring__:" + cronExpression;
+    }
+
+    private record RecurringDefinition(String type, String cron, int maxRetries) {
     }
 }

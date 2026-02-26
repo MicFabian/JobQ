@@ -75,6 +75,28 @@ public class JobQIntegrationTest {
     static volatile CountDownLatch slowJobFinishLatch;
     static final AtomicInteger recurringJobCount = new AtomicInteger(0);
     static volatile CountDownLatch recurringJobLatch;
+    static volatile UUID lastAnnotationOnlyProcessedJobId;
+    static volatile String lastAnnotationOnlyMessage;
+    static volatile CountDownLatch workerOnErrorLatch;
+    static volatile UUID lastWorkerOnErrorJobId;
+    static volatile String lastWorkerOnErrorMessage;
+    static volatile String lastWorkerOnErrorExceptionType;
+    static volatile CountDownLatch annotationOnErrorLatch;
+    static volatile UUID lastAnnotationOnErrorJobId;
+    static volatile String lastAnnotationOnErrorMessage;
+    static volatile String lastAnnotationOnErrorExceptionType;
+    static volatile CountDownLatch workerOnSuccessLatch;
+    static volatile UUID lastWorkerOnSuccessJobId;
+    static volatile String lastWorkerOnSuccessMessage;
+    static volatile CountDownLatch annotationOnSuccessLatch;
+    static volatile UUID lastAnnotationOnSuccessJobId;
+    static volatile String lastAnnotationOnSuccessMessage;
+    static volatile CountDownLatch annotationAfterLatch;
+    static volatile UUID lastAnnotationAfterJobId;
+    static volatile String lastAnnotationAfterMessage;
+    static volatile CountDownLatch workerAfterLatch;
+    static volatile UUID lastWorkerAfterJobId;
+    static volatile String lastWorkerAfterMessage;
 
     @Configuration
     static class TestConfig {
@@ -100,6 +122,22 @@ public class JobQIntegrationTest {
         }
 
         @Bean
+        JobWorker<TestPayload> inferredPayloadJob() {
+            return new JobWorker<TestPayload>() {
+                @Override
+                public String getJobType() {
+                    return "INFERRED_PAYLOAD_JOB";
+                }
+
+                @Override
+                public void process(UUID jobId, TestPayload payload) {
+                    lastProcessedMessage = payload.getMessage();
+                    jobLatch.countDown();
+                }
+            };
+        }
+
+        @Bean
         JobWorker<TestPayload> retryJobWorker() {
             return new JobWorker<TestPayload>() {
                 @Override
@@ -119,6 +157,201 @@ public class JobQIntegrationTest {
                     return TestPayload.class;
                 }
             };
+        }
+
+        @Bean
+        JobWorker<TestPayload> workerOnErrorJob() {
+            return new JobWorker<TestPayload>() {
+                @Override
+                public String getJobType() {
+                    return "WORKER_ON_ERROR_JOB";
+                }
+
+                @Override
+                public void process(UUID jobId, TestPayload payload) {
+                    throw new RuntimeException("Worker onError boom");
+                }
+
+                @Override
+                public void onError(UUID jobId, TestPayload payload, Exception exception) {
+                    lastWorkerOnErrorJobId = jobId;
+                    lastWorkerOnErrorMessage = payload != null ? payload.getMessage() : null;
+                    lastWorkerOnErrorExceptionType = exception.getClass().getName();
+                    if (workerOnErrorLatch != null) {
+                        workerOnErrorLatch.countDown();
+                    }
+                }
+            };
+        }
+
+        @Bean
+        JobWorker<TestPayload> workerOnErrorThrowsJob() {
+            return new JobWorker<TestPayload>() {
+                @Override
+                public String getJobType() {
+                    return "WORKER_ON_ERROR_THROWS_JOB";
+                }
+
+                @Override
+                public void process(UUID jobId, TestPayload payload) {
+                    throw new RuntimeException("Worker callback failure boom");
+                }
+
+                @Override
+                public void onError(UUID jobId, TestPayload payload, Exception exception) {
+                    throw new IllegalStateException("onError callback failed intentionally");
+                }
+            };
+        }
+
+        @Bean
+        JobWorker<TestPayload> workerOnSuccessJob() {
+            return new JobWorker<TestPayload>() {
+                @Override
+                public String getJobType() {
+                    return "WORKER_ON_SUCCESS_JOB";
+                }
+
+                @Override
+                public void process(UUID jobId, TestPayload payload) {
+                    // no-op
+                }
+
+                @Override
+                public void onSuccess(UUID jobId, TestPayload payload) {
+                    lastWorkerOnSuccessJobId = jobId;
+                    lastWorkerOnSuccessMessage = payload != null ? payload.getMessage() : null;
+                    if (workerOnSuccessLatch != null) {
+                        workerOnSuccessLatch.countDown();
+                    }
+                }
+            };
+        }
+
+        @Bean
+        JobWorker<TestPayload> workerOnSuccessThrowsJob() {
+            return new JobWorker<TestPayload>() {
+                @Override
+                public String getJobType() {
+                    return "WORKER_ON_SUCCESS_THROWS_JOB";
+                }
+
+                @Override
+                public void process(UUID jobId, TestPayload payload) {
+                    // no-op
+                }
+
+                @Override
+                public void onSuccess(UUID jobId, TestPayload payload) {
+                    throw new IllegalStateException("onSuccess callback failed intentionally");
+                }
+            };
+        }
+
+        @Bean
+        JobWorker<TestPayload> workerAfterJob() {
+            return new JobWorker<TestPayload>() {
+                @Override
+                public String getJobType() {
+                    return "WORKER_AFTER_JOB";
+                }
+
+                @Override
+                public void process(UUID jobId, TestPayload payload) {
+                    // no-op
+                }
+
+                @Override
+                public void after(UUID jobId, TestPayload payload) {
+                    lastWorkerAfterJobId = jobId;
+                    lastWorkerAfterMessage = payload != null ? payload.getMessage() : null;
+                    if (workerAfterLatch != null) {
+                        workerAfterLatch.countDown();
+                    }
+                }
+            };
+        }
+
+        @com.jobq.annotation.Job(value = "ANNOTATION_ONLY_JOB", payload = TestPayload.class)
+        static class AnnotationOnlyJob {
+            @SuppressWarnings("unused")
+            public void process(UUID jobId, TestPayload payload) {
+                lastAnnotationOnlyProcessedJobId = jobId;
+                lastAnnotationOnlyMessage = payload.getMessage();
+                jobLatch.countDown();
+            }
+        }
+
+        @Bean
+        AnnotationOnlyJob annotationOnlyJob() {
+            return new AnnotationOnlyJob();
+        }
+
+        @com.jobq.annotation.Job(value = "ANNOTATION_ON_ERROR_JOB", payload = TestPayload.class)
+        static class AnnotationOnErrorJob {
+            @SuppressWarnings("unused")
+            public void process(UUID jobId, TestPayload payload) {
+                throw new RuntimeException("Annotation onError boom");
+            }
+
+            @SuppressWarnings("unused")
+            public void onError(UUID jobId, TestPayload payload, Exception exception) {
+                lastAnnotationOnErrorJobId = jobId;
+                lastAnnotationOnErrorMessage = payload != null ? payload.getMessage() : null;
+                lastAnnotationOnErrorExceptionType = exception.getClass().getName();
+                if (annotationOnErrorLatch != null) {
+                    annotationOnErrorLatch.countDown();
+                }
+            }
+        }
+
+        @Bean
+        AnnotationOnErrorJob annotationOnErrorJob() {
+            return new AnnotationOnErrorJob();
+        }
+
+        @com.jobq.annotation.Job(value = "ANNOTATION_ON_SUCCESS_JOB", payload = TestPayload.class)
+        static class AnnotationOnSuccessJob {
+            @SuppressWarnings("unused")
+            public void process(UUID jobId, TestPayload payload) {
+                // no-op
+            }
+
+            @SuppressWarnings("unused")
+            public void onSuccess(UUID jobId, TestPayload payload) {
+                lastAnnotationOnSuccessJobId = jobId;
+                lastAnnotationOnSuccessMessage = payload != null ? payload.getMessage() : null;
+                if (annotationOnSuccessLatch != null) {
+                    annotationOnSuccessLatch.countDown();
+                }
+            }
+        }
+
+        @Bean
+        AnnotationOnSuccessJob annotationOnSuccessJob() {
+            return new AnnotationOnSuccessJob();
+        }
+
+        @com.jobq.annotation.Job(value = "ANNOTATION_AFTER_JOB", payload = TestPayload.class)
+        static class AnnotationAfterJob {
+            @SuppressWarnings("unused")
+            public void process(UUID jobId, TestPayload payload) {
+                // no-op
+            }
+
+            @SuppressWarnings("unused")
+            public void after(UUID jobId, TestPayload payload) {
+                lastAnnotationAfterJobId = jobId;
+                lastAnnotationAfterMessage = payload != null ? payload.getMessage() : null;
+                if (annotationAfterLatch != null) {
+                    annotationAfterLatch.countDown();
+                }
+            }
+        }
+
+        @Bean
+        AnnotationAfterJob annotationAfterJob() {
+            return new AnnotationAfterJob();
         }
 
         @com.jobq.annotation.Job(value = "EXPECTED_EXCEPTION_JOB", expectedExceptions = { ExpectedBusinessException.class })
@@ -431,6 +664,174 @@ public class JobQIntegrationTest {
             Job job = jobRepository.findById(jobId).orElseThrow();
             assertEquals("__NULL__", lastProcessedMessage);
             assertEquals("COMPLETED", job.getStatus());
+        });
+    }
+
+    @Test
+    void shouldEnqueueAndProcessJobWithInferredPayloadType() throws InterruptedException {
+        jobLatch = new CountDownLatch(1);
+        lastProcessedMessage = null;
+        UUID jobId = jobClient.enqueue("INFERRED_PAYLOAD_JOB", new TestPayload("Inferred payload"));
+
+        assertTrue(jobLatch.await(10, TimeUnit.SECONDS));
+
+        await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
+            Job job = jobRepository.findById(jobId).orElseThrow();
+            assertEquals("Inferred payload", lastProcessedMessage);
+            assertEquals("COMPLETED", job.getStatus());
+        });
+    }
+
+    @Test
+    void shouldEnqueueAndProcessAnnotationOnlyJobWithoutJobWorkerInterface() throws InterruptedException {
+        jobLatch = new CountDownLatch(1);
+        lastAnnotationOnlyMessage = null;
+        lastAnnotationOnlyProcessedJobId = null;
+        UUID jobId = jobClient.enqueue("ANNOTATION_ONLY_JOB", new TestPayload("Annotation only"));
+
+        assertTrue(jobLatch.await(10, TimeUnit.SECONDS));
+
+        await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
+            Job job = jobRepository.findById(jobId).orElseThrow();
+            assertEquals(jobId, lastAnnotationOnlyProcessedJobId);
+            assertEquals("Annotation only", lastAnnotationOnlyMessage);
+            assertEquals("COMPLETED", job.getStatus());
+        });
+    }
+
+    @Test
+    void shouldInvokeOnErrorForJobWorkerWhenProcessThrows() throws InterruptedException {
+        workerOnErrorLatch = new CountDownLatch(1);
+        lastWorkerOnErrorJobId = null;
+        lastWorkerOnErrorMessage = null;
+        lastWorkerOnErrorExceptionType = null;
+
+        UUID jobId = jobClient.enqueue("WORKER_ON_ERROR_JOB", new TestPayload("worker-on-error"), 0);
+        assertTrue(workerOnErrorLatch.await(10, TimeUnit.SECONDS));
+
+        await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
+            Job job = jobRepository.findById(jobId).orElseThrow();
+            assertEquals(jobId, lastWorkerOnErrorJobId);
+            assertEquals("worker-on-error", lastWorkerOnErrorMessage);
+            assertEquals(RuntimeException.class.getName(), lastWorkerOnErrorExceptionType);
+            assertEquals("FAILED", job.getStatus());
+            assertEquals(1, job.getRetryCount());
+        });
+    }
+
+    @Test
+    void shouldInvokeOnSuccessForJobWorkerWhenProcessSucceeds() throws InterruptedException {
+        workerOnSuccessLatch = new CountDownLatch(1);
+        lastWorkerOnSuccessJobId = null;
+        lastWorkerOnSuccessMessage = null;
+
+        UUID jobId = jobClient.enqueue("WORKER_ON_SUCCESS_JOB", new TestPayload("worker-on-success"));
+        assertTrue(workerOnSuccessLatch.await(10, TimeUnit.SECONDS));
+
+        await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
+            Job job = jobRepository.findById(jobId).orElseThrow();
+            assertEquals(jobId, lastWorkerOnSuccessJobId);
+            assertEquals("worker-on-success", lastWorkerOnSuccessMessage);
+            assertEquals("COMPLETED", job.getStatus());
+            assertEquals(0, job.getRetryCount());
+        });
+    }
+
+    @Test
+    void shouldInvokeAfterAliasForJobWorkerWhenProcessSucceeds() throws InterruptedException {
+        workerAfterLatch = new CountDownLatch(1);
+        lastWorkerAfterJobId = null;
+        lastWorkerAfterMessage = null;
+
+        UUID jobId = jobClient.enqueue("WORKER_AFTER_JOB", new TestPayload("worker-after"));
+        assertTrue(workerAfterLatch.await(10, TimeUnit.SECONDS));
+
+        await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
+            Job job = jobRepository.findById(jobId).orElseThrow();
+            assertEquals(jobId, lastWorkerAfterJobId);
+            assertEquals("worker-after", lastWorkerAfterMessage);
+            assertEquals("COMPLETED", job.getStatus());
+            assertEquals(0, job.getRetryCount());
+        });
+    }
+
+    @Test
+    void shouldInvokeOnErrorForAnnotationOnlyJobWhenProcessThrows() throws InterruptedException {
+        annotationOnErrorLatch = new CountDownLatch(1);
+        lastAnnotationOnErrorJobId = null;
+        lastAnnotationOnErrorMessage = null;
+        lastAnnotationOnErrorExceptionType = null;
+
+        UUID jobId = jobClient.enqueue("ANNOTATION_ON_ERROR_JOB", new TestPayload("annotation-on-error"), 0);
+        assertTrue(annotationOnErrorLatch.await(10, TimeUnit.SECONDS));
+
+        await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
+            Job job = jobRepository.findById(jobId).orElseThrow();
+            assertEquals(jobId, lastAnnotationOnErrorJobId);
+            assertEquals("annotation-on-error", lastAnnotationOnErrorMessage);
+            assertEquals(RuntimeException.class.getName(), lastAnnotationOnErrorExceptionType);
+            assertEquals("FAILED", job.getStatus());
+            assertEquals(1, job.getRetryCount());
+        });
+    }
+
+    @Test
+    void shouldInvokeOnSuccessForAnnotationOnlyJobWhenProcessSucceeds() throws InterruptedException {
+        annotationOnSuccessLatch = new CountDownLatch(1);
+        lastAnnotationOnSuccessJobId = null;
+        lastAnnotationOnSuccessMessage = null;
+
+        UUID jobId = jobClient.enqueue("ANNOTATION_ON_SUCCESS_JOB", new TestPayload("annotation-on-success"));
+        assertTrue(annotationOnSuccessLatch.await(10, TimeUnit.SECONDS));
+
+        await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
+            Job job = jobRepository.findById(jobId).orElseThrow();
+            assertEquals(jobId, lastAnnotationOnSuccessJobId);
+            assertEquals("annotation-on-success", lastAnnotationOnSuccessMessage);
+            assertEquals("COMPLETED", job.getStatus());
+            assertEquals(0, job.getRetryCount());
+        });
+    }
+
+    @Test
+    void shouldInvokeAfterAliasForAnnotationOnlyJobWhenProcessSucceeds() throws InterruptedException {
+        annotationAfterLatch = new CountDownLatch(1);
+        lastAnnotationAfterJobId = null;
+        lastAnnotationAfterMessage = null;
+
+        UUID jobId = jobClient.enqueue("ANNOTATION_AFTER_JOB", new TestPayload("annotation-after"));
+        assertTrue(annotationAfterLatch.await(10, TimeUnit.SECONDS));
+
+        await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
+            Job job = jobRepository.findById(jobId).orElseThrow();
+            assertEquals(jobId, lastAnnotationAfterJobId);
+            assertEquals("annotation-after", lastAnnotationAfterMessage);
+            assertEquals("COMPLETED", job.getStatus());
+            assertEquals(0, job.getRetryCount());
+        });
+    }
+
+    @Test
+    void shouldContinueFailureHandlingWhenOnErrorCallbackThrows() {
+        UUID jobId = jobClient.enqueue("WORKER_ON_ERROR_THROWS_JOB", new TestPayload("callback-throws"), 0);
+
+        await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
+            Job job = jobRepository.findById(jobId).orElseThrow();
+            assertEquals("FAILED", job.getStatus());
+            assertEquals(1, job.getRetryCount());
+            assertEquals("Worker callback failure boom", job.getErrorMessage());
+        });
+    }
+
+    @Test
+    void shouldKeepJobCompletedWhenOnSuccessCallbackThrows() {
+        UUID jobId = jobClient.enqueue("WORKER_ON_SUCCESS_THROWS_JOB", new TestPayload("callback-throws-success"));
+
+        await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
+            Job job = jobRepository.findById(jobId).orElseThrow();
+            assertEquals("COMPLETED", job.getStatus());
+            assertEquals(0, job.getRetryCount());
+            assertNull(job.getErrorMessage());
         });
     }
 

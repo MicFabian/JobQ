@@ -18,7 +18,6 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.time.format.DateTimeFormatter;
-import java.util.List;
 import java.util.UUID;
 
 @RestController
@@ -39,10 +38,11 @@ public class JobQDashboardController {
     @GetMapping(value = "/stats", produces = MediaType.TEXT_HTML_VALUE)
     public String getStats(@RequestParam(name = "filter", required = false, defaultValue = "") String filter) {
         String normalizedFilter = normalizeStatus(filter);
-        long pending = jobRepository.countPendingJobs();
-        long processing = jobRepository.countProcessingJobs();
-        long completed = jobRepository.countCompletedJobs();
-        long failed = jobRepository.countFailedJobs();
+        JobRepository.LifecycleCounts lifecycleCounts = jobRepository.countLifecycleCounts();
+        long pending = countOrZero(lifecycleCounts.getPendingCount());
+        long processing = countOrZero(lifecycleCounts.getProcessingCount());
+        long completed = countOrZero(lifecycleCounts.getCompletedCount());
+        long failed = countOrZero(lifecycleCounts.getFailedCount());
         long total = pending + processing + completed + failed;
 
         return """
@@ -89,7 +89,9 @@ public class JobQDashboardController {
             @RequestParam(name = "status", required = false, defaultValue = "") String status) {
         String normalizedStatus = normalizeStatus(status);
 
-        PageRequest pageRequest = PageRequest.of(page, size, Sort.by(Sort.Direction.DESC, "createdAt"));
+        int normalizedPage = Math.max(0, page);
+        int normalizedSize = Math.max(1, Math.min(200, size));
+        PageRequest pageRequest = PageRequest.of(normalizedPage, normalizedSize, Sort.by(Sort.Direction.DESC, "createdAt"));
         Page<Job> jobsPage = switch (normalizedStatus) {
             case "PENDING" -> jobRepository.findPendingJobs(pageRequest);
             case "PROCESSING" -> jobRepository.findProcessingJobs(pageRequest);
@@ -177,9 +179,10 @@ public class JobQDashboardController {
                 """
                 .formatted(
                         rows.toString(),
-                        page + 1, Math.max(1, jobsPage.getTotalPages()),
-                        page == 0 ? "disabled" : "", normalizedStatus, Math.max(0, page - 1),
-                        page >= jobsPage.getTotalPages() - 1 ? "disabled" : "", normalizedStatus, page + 1,
+                        normalizedPage + 1, Math.max(1, jobsPage.getTotalPages()),
+                        normalizedPage == 0 ? "disabled" : "", normalizedStatus, Math.max(0, normalizedPage - 1),
+                        normalizedPage >= jobsPage.getTotalPages() - 1 ? "disabled" : "", normalizedStatus,
+                        normalizedPage + 1,
                         normalizedStatus);
     }
 
@@ -390,5 +393,9 @@ public class JobQDashboardController {
             case "PENDING", "PROCESSING", "COMPLETED", "FAILED" -> rawStatus;
             default -> "";
         };
+    }
+
+    private long countOrZero(Long value) {
+        return value == null ? 0L : value;
     }
 }

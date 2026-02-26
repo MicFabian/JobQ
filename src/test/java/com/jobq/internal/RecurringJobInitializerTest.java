@@ -7,9 +7,11 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.aop.framework.ProxyFactory;
+import org.springframework.beans.factory.ListableBeanFactory;
 
 import java.time.OffsetDateTime;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
@@ -24,10 +26,13 @@ import static org.mockito.Mockito.when;
 class RecurringJobInitializerTest {
 
     private JobRepository jobRepository;
+    private ListableBeanFactory beanFactory;
 
     @BeforeEach
     void setUp() {
         jobRepository = mock(JobRepository.class);
+        beanFactory = mock(ListableBeanFactory.class);
+        when(beanFactory.getBeansWithAnnotation(com.jobq.annotation.Job.class)).thenReturn(Map.of());
     }
 
     @com.jobq.annotation.Job(value = "RECURRING_BOOTSTRAP_JOB", cron = "*/5 * * * * *", maxRetries = 7)
@@ -35,11 +40,6 @@ class RecurringJobInitializerTest {
         @Override
         public void process(UUID jobId, Void payload) {
             // no-op
-        }
-
-        @Override
-        public Class<Void> getPayloadClass() {
-            return Void.class;
         }
     }
 
@@ -49,10 +49,13 @@ class RecurringJobInitializerTest {
         public void process(UUID jobId, Void payload) {
             // no-op
         }
+    }
 
-        @Override
-        public Class<Void> getPayloadClass() {
-            return Void.class;
+    @com.jobq.annotation.Job(value = "ANNOTATION_ONLY_RECURRING_JOB", cron = "*/5 * * * * *", maxRetries = 4)
+    static class AnnotationOnlyRecurringJob {
+        @SuppressWarnings("unused")
+        public void process(UUID jobId) {
+            // no-op
         }
     }
 
@@ -62,7 +65,8 @@ class RecurringJobInitializerTest {
                 "RECURRING_BOOTSTRAP_JOB",
                 "*/5 * * * * *")).thenReturn(false);
 
-        RecurringJobInitializer initializer = new RecurringJobInitializer(jobRepository, List.of(new RecurringWorker()));
+        RecurringJobInitializer initializer = new RecurringJobInitializer(jobRepository, List.of(new RecurringWorker()),
+                beanFactory);
         initializer.start();
 
         ArgumentCaptor<Job> captor = ArgumentCaptor.forClass(Job.class);
@@ -84,7 +88,8 @@ class RecurringJobInitializerTest {
                 "RECURRING_BOOTSTRAP_JOB",
                 "*/5 * * * * *")).thenReturn(true);
 
-        RecurringJobInitializer initializer = new RecurringJobInitializer(jobRepository, List.of(new RecurringWorker()));
+        RecurringJobInitializer initializer = new RecurringJobInitializer(jobRepository, List.of(new RecurringWorker()),
+                beanFactory);
         initializer.start();
 
         verify(jobRepository, never()).save(org.mockito.ArgumentMatchers.any(Job.class));
@@ -96,7 +101,8 @@ class RecurringJobInitializerTest {
                 "INVALID_CRON_JOB",
                 "not-a-cron")).thenReturn(false);
 
-        RecurringJobInitializer initializer = new RecurringJobInitializer(jobRepository, List.of(new InvalidCronWorker()));
+        RecurringJobInitializer initializer = new RecurringJobInitializer(jobRepository, List.of(new InvalidCronWorker()),
+                beanFactory);
 
         assertDoesNotThrow(initializer::start);
         verify(jobRepository, never()).save(org.mockito.ArgumentMatchers.any(Job.class));
@@ -113,9 +119,27 @@ class RecurringJobInitializerTest {
         @SuppressWarnings("unchecked")
         JobWorker<Void> proxiedWorker = (JobWorker<Void>) proxyFactory.getProxy();
 
-        RecurringJobInitializer initializer = new RecurringJobInitializer(jobRepository, List.of(proxiedWorker));
+        RecurringJobInitializer initializer = new RecurringJobInitializer(jobRepository, List.of(proxiedWorker),
+                beanFactory);
         initializer.start();
 
         verify(jobRepository).save(org.mockito.ArgumentMatchers.any(Job.class));
+    }
+
+    @Test
+    void shouldBootstrapRecurringJobFromAnnotationOnlyBean() {
+        when(beanFactory.getBeansWithAnnotation(com.jobq.annotation.Job.class))
+                .thenReturn(Map.of("annotationOnlyRecurringJob", new AnnotationOnlyRecurringJob()));
+        when(jobRepository.existsByTypeAndCronAndFinishedAtIsNullAndFailedAtIsNull(
+                "ANNOTATION_ONLY_RECURRING_JOB",
+                "*/5 * * * * *")).thenReturn(false);
+
+        RecurringJobInitializer initializer = new RecurringJobInitializer(jobRepository, List.of(), beanFactory);
+        initializer.start();
+
+        ArgumentCaptor<Job> captor = ArgumentCaptor.forClass(Job.class);
+        verify(jobRepository).save(captor.capture());
+        assertEquals("ANNOTATION_ONLY_RECURRING_JOB", captor.getValue().getType());
+        assertEquals(4, captor.getValue().getMaxRetries());
     }
 }

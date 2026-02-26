@@ -11,7 +11,7 @@ import org.springframework.stereotype.Component;
 import javax.sql.DataSource;
 
 @Component
-@ConditionalOnProperty(prefix = "jobq.schema", name = "auto-initialize", havingValue = "true", matchIfMissing = true)
+@ConditionalOnProperty(prefix = "jobq.database", name = "skip-create", havingValue = "false", matchIfMissing = true)
 public class JobSchemaInitializer implements InitializingBean {
 
     private static final Logger log = LoggerFactory.getLogger(JobSchemaInitializer.class);

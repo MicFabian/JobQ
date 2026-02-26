@@ -10,9 +10,14 @@ It is designed for teams that want transactional job enqueueing, high concurrenc
 - Concurrent polling using `FOR UPDATE SKIP LOCKED`
 - Retry handling with backoff and priority shift strategies
 - Recurring jobs via cron on `@Job`
-- Optional worker type auto-resolution from `@Job` (no `getJobType()` boilerplate)
+- Optional job type auto-resolution from `@Job` (no `getJobType()` boilerplate)
+- Annotation-driven jobs with `@Job(payload = ...)` (no interface required)
+- Optional payload type auto-resolution from `JobWorker<T>` when using the interface
+- Optional `onError(...)` hook per job
+- Optional `onSuccess(...)` / `after(...)` hook per job
 - Job grouping (`groupId`) and deduplication (`replaceKey`)
 - Built-in HTMX dashboard (status, payload inspection, restart failed jobs)
+- Dashboard/metrics lifecycle counters fetched via single aggregated query
 - Built-in Micrometer gauges
 - Automatic retention cleanup for completed/failed jobs
 - Java 25 and Spring Boot 4 support
@@ -41,7 +46,7 @@ jobq:
     permanently-delete-deleted-jobs-after: 72h
 
   database:
-    skip-create: false
+    skip-create: false            # true = do not auto-run jobq-schema.sql
     table-prefix: ""
 
   dashboard:
@@ -61,32 +66,62 @@ jobq:
 public record WelcomeEmailPayload(String email, String template) {}
 ```
 
-### 2. Implement worker
+### 2. Implement job
 
 ```java
-import com.jobq.JobWorker;
 import com.jobq.annotation.Job;
 import org.springframework.stereotype.Component;
 
 import java.util.UUID;
 
 @Component
-@Job("send-welcome-email")
-public class WelcomeEmailWorker implements JobWorker<WelcomeEmailPayload> {
+@Job(value = "send-welcome-email", payload = WelcomeEmailPayload.class)
+public class WelcomeEmailJob {
 
-    @Override
     public void process(UUID jobId, WelcomeEmailPayload payload) {
         // business logic
     }
 
-    @Override
-    public Class<WelcomeEmailPayload> getPayloadClass() {
-        return WelcomeEmailPayload.class;
+    public void onError(UUID jobId, WelcomeEmailPayload payload, Exception exception) {
+        // optional: called when process(...) throws
+    }
+
+    public void onSuccess(UUID jobId, WelcomeEmailPayload payload) {
+        // optional: called after successful completion
     }
 }
 ```
 
-`getJobType()` is optional. If not overridden, JobQ uses `@Job("...")`.
+For annotation-only jobs, the job type comes from `@Job(value = "...")`.
+`JobWorker` is optional. If you use `JobWorker<T>`, `getJobType()` and `getPayloadClass()` are optional and inferred.
+For `JobWorker<T>`, you can override either `onSuccess(...)` or the `after(...)` alias.
+
+Supported annotation-driven `process` signatures:
+
+- `process()`
+- `process(UUID jobId)`
+- `process(Payload payload)`
+- `process(UUID jobId, Payload payload)`
+
+Supported annotation-driven `onError` signatures:
+
+- `onError(Exception e)`
+- `onError(UUID jobId, Exception e)`
+- `onError(Payload payload, Exception e)`
+- `onError(UUID jobId, Payload payload, Exception e)`
+
+If `onError(...)` throws, JobQ logs that callback failure and continues normal retry/failure handling using the original processing exception.
+
+Supported annotation-driven success hook signatures (`onSuccess` or `after`):
+
+- `onSuccess()`
+- `onSuccess(UUID jobId)`
+- `onSuccess(Payload payload)`
+- `onSuccess(UUID jobId, Payload payload)`
+
+or the same signatures using `after(...)` as the method name.
+
+If a success callback throws, JobQ logs it and keeps the job in `COMPLETED` state.
 
 ### 3. Enqueue inside a transaction
 
@@ -114,6 +149,18 @@ public class UserService {
 
 If the transaction rolls back, the job is not persisted.
 
+## Schema Initialization
+
+By default, JobQ auto-runs `jobq-schema.sql` at startup.
+
+Disable schema auto-creation when your project manages DDL externally:
+
+```yaml
+jobq:
+  database:
+    skip-create: true
+```
+
 ## Retry, Backoff, Priority
 
 ```java
@@ -134,7 +181,7 @@ When processing throws a non-whitelisted exception:
 
 ## Expected Exceptions (Whitelist)
 
-If a worker throws an exception that represents an expected business outcome, whitelist it in `@Job`.
+If a job throws an exception that represents an expected business outcome, whitelist it in `@Job`.
 
 ```java
 @Job(
@@ -256,4 +303,4 @@ Important indexes:
 
 - No external broker required
 - Works well with multiple app instances
-- Uses DB-level locking primitives for safe concurrent workers
+- Uses DB-level locking primitives for safe concurrent processors

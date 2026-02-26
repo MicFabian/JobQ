@@ -3,8 +3,8 @@ package com.jobq.annotation;
 import java.lang.annotation.*;
 
 /**
- * Indicates that the annotated component is a JobWorker and configures
- * its execution behavior (retries, backoff, queueing priority).
+ * Indicates that the annotated component is a JobQ job and configures its
+ * execution behavior (retries, backoff, queueing priority).
  */
 @Target({ ElementType.TYPE, ElementType.METHOD })
 @Retention(RetentionPolicy.RUNTIME)
@@ -12,9 +12,16 @@ import java.lang.annotation.*;
 public @interface Job {
 
     /**
-     * The type of job this worker handles.
+     * The type of job this processor handles.
      */
     String value();
+
+    /**
+     * Optional payload class for annotation-driven jobs. When left as
+     * {@code Void.class}, JobQ will infer the payload parameter from the
+     * {@code process(...)} method signature when possible.
+     */
+    Class<?> payload() default Void.class;
 
     /**
      * A cron expression for recurring jobs. If provided, the job will be

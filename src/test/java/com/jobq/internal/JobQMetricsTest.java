@@ -9,6 +9,8 @@ import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class JobQMetricsTest {
@@ -26,11 +28,12 @@ class JobQMetricsTest {
 
     @Test
     void shouldRegisterGaugesForJobStatuses() {
-        when(jobRepository.countPendingJobs()).thenReturn(10L);
-        when(jobRepository.countProcessingJobs()).thenReturn(5L);
-        when(jobRepository.countCompletedJobs()).thenReturn(100L);
-        when(jobRepository.countFailedJobs()).thenReturn(2L);
-        when(jobRepository.count()).thenReturn(117L);
+        JobRepository.LifecycleCounts counts = mock(JobRepository.LifecycleCounts.class);
+        when(counts.getPendingCount()).thenReturn(10L);
+        when(counts.getProcessingCount()).thenReturn(5L);
+        when(counts.getCompletedCount()).thenReturn(100L);
+        when(counts.getFailedCount()).thenReturn(2L);
+        when(jobRepository.countLifecycleCounts()).thenReturn(counts);
 
         jobQMetrics.registerMetrics();
 
@@ -45,5 +48,7 @@ class JobQMetricsTest {
         Gauge totalGauge = meterRegistry.find("jobq.jobs.total").gauge();
         assertThat(totalGauge).isNotNull();
         assertThat(totalGauge.value()).isEqualTo(117.0);
+
+        verify(jobRepository, times(1)).countLifecycleCounts();
     }
 }
