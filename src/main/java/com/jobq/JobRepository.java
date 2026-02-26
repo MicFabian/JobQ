@@ -6,12 +6,15 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Lock;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.jpa.repository.QueryHints;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 import java.time.OffsetDateTime;
 
@@ -20,12 +23,155 @@ public interface JobRepository extends JpaRepository<Job, UUID> {
 
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @QueryHints({ @QueryHint(name = "jakarta.persistence.lock.timeout", value = "-2") }) // SKIP LOCKED
-    @Query("SELECT j FROM Job j WHERE j.type = :type AND j.status = 'PENDING' AND j.runAt <= CURRENT_TIMESTAMP ORDER BY j.priority DESC, j.createdAt ASC")
+    @Query("""
+            SELECT j FROM Job j
+            WHERE j.type = :type
+              AND j.processingStartedAt IS NULL
+              AND j.finishedAt IS NULL
+              AND j.failedAt IS NULL
+              AND j.runAt <= CURRENT_TIMESTAMP
+            ORDER BY j.priority DESC, j.createdAt ASC
+            """)
     List<Job> findNextJobsForUpdate(@Param("type") String type, Pageable pageable);
 
-    Page<Job> findByStatus(String status, Pageable pageable);
+    @Query("""
+            SELECT j FROM Job j
+            WHERE j.processingStartedAt IS NULL
+              AND j.finishedAt IS NULL
+              AND j.failedAt IS NULL
+            """)
+    Page<Job> findPendingJobs(Pageable pageable);
 
-    long countByStatus(String status);
+    @Query("""
+            SELECT j FROM Job j
+            WHERE j.processingStartedAt IS NOT NULL
+              AND j.finishedAt IS NULL
+              AND j.failedAt IS NULL
+            """)
+    Page<Job> findProcessingJobs(Pageable pageable);
 
-    int deleteByStatusAndUpdatedAtBefore(String status, OffsetDateTime updatedAt);
+    @Query("SELECT j FROM Job j WHERE j.finishedAt IS NOT NULL")
+    Page<Job> findCompletedJobs(Pageable pageable);
+
+    @Query("SELECT j FROM Job j WHERE j.failedAt IS NOT NULL")
+    Page<Job> findFailedJobs(Pageable pageable);
+
+    @Query("""
+            SELECT COUNT(j) FROM Job j
+            WHERE j.processingStartedAt IS NULL
+              AND j.finishedAt IS NULL
+              AND j.failedAt IS NULL
+            """)
+    long countPendingJobs();
+
+    @Query("""
+            SELECT COUNT(j) FROM Job j
+            WHERE j.processingStartedAt IS NOT NULL
+              AND j.finishedAt IS NULL
+              AND j.failedAt IS NULL
+            """)
+    long countProcessingJobs();
+
+    @Query("SELECT COUNT(j) FROM Job j WHERE j.finishedAt IS NOT NULL")
+    long countCompletedJobs();
+
+    @Query("SELECT COUNT(j) FROM Job j WHERE j.failedAt IS NOT NULL")
+    long countFailedJobs();
+
+    @Query("""
+            SELECT j FROM Job j
+            WHERE j.type = :type
+              AND j.replaceKey = :replaceKey
+              AND j.processingStartedAt IS NULL
+              AND j.finishedAt IS NULL
+              AND j.failedAt IS NULL
+            """)
+    Optional<Job> findPendingByTypeAndReplaceKey(@Param("type") String type, @Param("replaceKey") String replaceKey);
+
+    @Modifying
+    @Transactional
+    int deleteByFinishedAtBefore(OffsetDateTime finishedAt);
+
+    @Modifying
+    @Transactional
+    int deleteByFailedAtBefore(OffsetDateTime failedAt);
+
+    @Modifying
+    @Query("""
+            UPDATE Job j
+            SET j.processingStartedAt = COALESCE(j.processingStartedAt, :now),
+                j.finishedAt = :now,
+                j.failedAt = NULL,
+                j.errorMessage = NULL,
+                j.lockedAt = NULL,
+                j.lockedBy = NULL,
+                j.updatedAt = :now
+            WHERE j.id = :id
+              AND j.processingStartedAt IS NOT NULL
+              AND j.finishedAt IS NULL
+              AND j.failedAt IS NULL
+              AND j.lockedAt IS NOT NULL
+              AND j.lockedBy = :lockedBy
+            """)
+    int markCompleted(@Param("id") UUID id, @Param("now") OffsetDateTime now, @Param("lockedBy") String lockedBy);
+
+    @Modifying
+    @Query("""
+            UPDATE Job j
+            SET j.retryCount = :nextRetryCount,
+                j.errorMessage = :errorMessage,
+                j.updatedAt = :now,
+                j.processingStartedAt = COALESCE(j.processingStartedAt, :now),
+                j.failedAt = :now,
+                j.finishedAt = NULL,
+                j.lockedAt = NULL,
+                j.lockedBy = NULL
+            WHERE j.id = :id
+              AND j.retryCount = :expectedRetryCount
+              AND j.processingStartedAt IS NOT NULL
+              AND j.finishedAt IS NULL
+              AND j.failedAt IS NULL
+              AND j.lockedAt IS NOT NULL
+              AND j.lockedBy = :lockedBy
+            """)
+    int markFailedTerminal(
+            @Param("id") UUID id,
+            @Param("expectedRetryCount") int expectedRetryCount,
+            @Param("nextRetryCount") int nextRetryCount,
+            @Param("errorMessage") String errorMessage,
+            @Param("now") OffsetDateTime now,
+            @Param("lockedBy") String lockedBy);
+
+    @Modifying
+    @Query("""
+            UPDATE Job j
+            SET j.retryCount = :nextRetryCount,
+                j.errorMessage = :errorMessage,
+                j.updatedAt = :now,
+                j.processingStartedAt = NULL,
+                j.finishedAt = NULL,
+                j.failedAt = NULL,
+                j.lockedAt = NULL,
+                j.lockedBy = NULL,
+                j.runAt = :nextRunAt,
+                j.priority = :nextPriority
+            WHERE j.id = :id
+              AND j.retryCount = :expectedRetryCount
+              AND j.processingStartedAt IS NOT NULL
+              AND j.finishedAt IS NULL
+              AND j.failedAt IS NULL
+              AND j.lockedAt IS NOT NULL
+              AND j.lockedBy = :lockedBy
+            """)
+    int markForRetry(
+            @Param("id") UUID id,
+            @Param("expectedRetryCount") int expectedRetryCount,
+            @Param("nextRetryCount") int nextRetryCount,
+            @Param("errorMessage") String errorMessage,
+            @Param("now") OffsetDateTime now,
+            @Param("nextRunAt") OffsetDateTime nextRunAt,
+            @Param("nextPriority") int nextPriority,
+            @Param("lockedBy") String lockedBy);
+
+    boolean existsByTypeAndCronAndFinishedAtIsNullAndFailedAtIsNull(String type, String cron);
 }

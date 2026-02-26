@@ -8,7 +8,9 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.web.servlet.HandlerInterceptor;
 
+import java.security.MessageDigest;
 import java.nio.charset.StandardCharsets;
+import java.security.Principal;
 import java.util.Base64;
 
 @Component
@@ -24,18 +26,24 @@ public class JobQAuthInterceptor implements HandlerInterceptor {
     @Override
     public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler)
             throws Exception {
+        if (properties.getDashboard().getAuthMode() == JobQProperties.Dashboard.AuthMode.SPRING_SECURITY) {
+            return authorizeWithSpringSecurity(request, response);
+        }
+
         String reqUsername = properties.getDashboard().getUsername();
         String reqPassword = properties.getDashboard().getPassword();
 
-        // If credentials are not set, auth is bypassed (or managed globally by the host
-        // app)
+        // Dashboard must never be open. If credentials are missing for any reason,
+        // fail closed and request authentication.
         if (reqUsername == null || reqUsername.isBlank() || reqPassword == null || reqPassword.isBlank()) {
-            return true;
+            response.setHeader("WWW-Authenticate", "Basic realm=\"JobQ Dashboard\"");
+            response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+            return false;
         }
 
         String authHeader = request.getHeader("Authorization");
 
-        if (authHeader != null && authHeader.toLowerCase().startsWith("basic ")) {
+        if (authHeader != null && authHeader.regionMatches(true, 0, "Basic ", 0, "Basic ".length())) {
             String base64Credentials = authHeader.substring("Basic ".length()).trim();
             try {
                 byte[] credDecoded = Base64.getDecoder().decode(base64Credentials);
@@ -46,9 +54,7 @@ public class JobQAuthInterceptor implements HandlerInterceptor {
                     String username = values[0];
                     String password = values[1];
 
-                    // Standard string compare; acceptable for local library scopes without Spring
-                    // Security
-                    if (reqUsername.equals(username) && reqPassword.equals(password)) {
+                    if (constantTimeEquals(reqUsername, username) && constantTimeEquals(reqPassword, password)) {
                         return true;
                     }
                 }
@@ -61,5 +67,39 @@ public class JobQAuthInterceptor implements HandlerInterceptor {
         response.setHeader("WWW-Authenticate", "Basic realm=\"JobQ Dashboard\"");
         response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
         return false;
+    }
+
+    private boolean authorizeWithSpringSecurity(HttpServletRequest request, HttpServletResponse response) {
+        Principal principal = request.getUserPrincipal();
+        if (principal == null) {
+            response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+            return false;
+        }
+
+        String requiredRole = properties.getDashboard().getRequiredRole();
+        if (requiredRole == null || requiredRole.isBlank()) {
+            return true;
+        }
+
+        if (hasRole(request, requiredRole)) {
+            return true;
+        }
+
+        response.setStatus(HttpServletResponse.SC_FORBIDDEN);
+        return false;
+    }
+
+    private boolean hasRole(HttpServletRequest request, String requiredRole) {
+        if (request.isUserInRole(requiredRole)) {
+            return true;
+        }
+        if (requiredRole.startsWith("ROLE_")) {
+            return request.isUserInRole(requiredRole.substring("ROLE_".length()));
+        }
+        return request.isUserInRole("ROLE_" + requiredRole);
+    }
+
+    private boolean constantTimeEquals(String left, String right) {
+        return MessageDigest.isEqual(left.getBytes(StandardCharsets.UTF_8), right.getBytes(StandardCharsets.UTF_8));
     }
 }

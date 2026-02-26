@@ -16,8 +16,8 @@ java {
 
 repositories {
     mavenCentral()
-    maven { url 'https://repo.spring.io/milestone' }
-    maven { url 'https://repo.spring.io/snapshot' }
+    maven { url = uri('https://repo.spring.io/milestone') }
+    maven { url = uri('https://repo.spring.io/snapshot') }
 }
 
 dependencyManagement {
@@ -67,5 +67,6 @@ dependencies {
 
 tasks.withType(Test) {
     useJUnitPlatform()
-    jvmArgs "-Dnet.bytebuddy.experimental=true"
+    // Keep Mockito/ByteBuddy stable on newer JDKs while suppressing JVM attach/CDS warnings.
+    jvmArgs "-Dnet.bytebuddy.experimental=true", "-XX:+EnableDynamicAgentLoading", "-Xshare:off"
 }

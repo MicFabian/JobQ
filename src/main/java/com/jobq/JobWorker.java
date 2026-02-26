@@ -11,9 +11,19 @@ public interface JobWorker<T> {
 
     /**
      * Returns the globally unique type of job this worker is capable of processing.
-     * Ensure this matches the type provided when enqueueing a job.
+     * By default, this is extracted from the {@link com.jobq.annotation.Job}
+     * annotation.
      */
-    String getJobType();
+    default String getJobType() {
+        Class<?> targetClass = org.springframework.util.ClassUtils.getUserClass(this);
+        com.jobq.annotation.Job annotation = org.springframework.core.annotation.AnnotationUtils
+                .findAnnotation(targetClass, com.jobq.annotation.Job.class);
+        if (annotation == null || annotation.value().isBlank()) {
+            throw new IllegalStateException("JobWorker " + targetClass.getName() +
+                    " must either be annotated with @Job or override getJobType()");
+        }
+        return annotation.value();
+    }
 
     /**
      * Processes a single job.

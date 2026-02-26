@@ -26,10 +26,10 @@ class JobQMetricsTest {
 
     @Test
     void shouldRegisterGaugesForJobStatuses() {
-        when(jobRepository.countByStatus("PENDING")).thenReturn(10L);
-        when(jobRepository.countByStatus("PROCESSING")).thenReturn(5L);
-        when(jobRepository.countByStatus("COMPLETED")).thenReturn(100L);
-        when(jobRepository.countByStatus("FAILED")).thenReturn(2L);
+        when(jobRepository.countPendingJobs()).thenReturn(10L);
+        when(jobRepository.countProcessingJobs()).thenReturn(5L);
+        when(jobRepository.countCompletedJobs()).thenReturn(100L);
+        when(jobRepository.countFailedJobs()).thenReturn(2L);
         when(jobRepository.count()).thenReturn(117L);
 
         jobQMetrics.registerMetrics();

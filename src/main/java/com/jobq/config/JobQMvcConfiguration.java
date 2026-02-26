@@ -7,7 +7,7 @@ import org.springframework.web.servlet.config.annotation.ViewControllerRegistry;
 import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 
 @Configuration
-@ConditionalOnProperty(prefix = "jobq.dashboard", name = "enabled", havingValue = "true", matchIfMissing = true)
+@ConditionalOnProperty(prefix = "jobq.dashboard", name = "enabled", havingValue = "true")
 public class JobQMvcConfiguration implements WebMvcConfigurer {
 
     private final JobQProperties properties;
@@ -26,7 +26,18 @@ public class JobQMvcConfiguration implements WebMvcConfigurer {
     @Override
     public void addViewControllers(ViewControllerRegistry registry) {
         // Map the configurable dashboard path to the JobQ index.html
-        String path = properties.getDashboard().getPath();
+        String path = normalizeDashboardPath(properties.getDashboard().getPath());
         registry.addViewController(path).setViewName("forward:/jobq/assets/index.html");
+    }
+
+    private String normalizeDashboardPath(String configuredPath) {
+        if (configuredPath == null || configuredPath.isBlank()) {
+            return "/jobq/dashboard";
+        }
+        String normalized = configuredPath.startsWith("/") ? configuredPath : "/" + configuredPath;
+        if (normalized.length() > 1 && normalized.endsWith("/")) {
+            normalized = normalized.substring(0, normalized.length() - 1);
+        }
+        return normalized;
     }
 }

@@ -23,17 +23,19 @@ class JobQDashboardSecurityTest {
 
     @BeforeEach
     void setUp() {
+        jobRepository = mock(JobRepository.class);
+
         JobQProperties properties = new JobQProperties();
         properties.getDashboard().setUsername("admin");
         properties.getDashboard().setPassword("supersecret");
+        this.mockMvc = buildMockMvc(properties);
+    }
 
-        jobRepository = mock(JobRepository.class);
+    private MockMvc buildMockMvc(JobQProperties properties) {
         ObjectMapper objectMapper = new ObjectMapper();
-
         JobQDashboardController controller = new JobQDashboardController(jobRepository, objectMapper);
         JobQAuthInterceptor authInterceptor = new JobQAuthInterceptor(properties);
-
-        this.mockMvc = MockMvcBuilders.standaloneSetup(controller)
+        return MockMvcBuilders.standaloneSetup(controller)
                 .addInterceptors(authInterceptor)
                 .build();
     }
@@ -61,5 +63,81 @@ class JobQDashboardSecurityTest {
         mockMvc.perform(get("/jobq/htmx/stats")
                 .header(HttpHeaders.AUTHORIZATION, "Basic " + base64Creds))
                 .andExpect(status().isOk());
+    }
+
+    @Test
+    void shouldFailClosedWhenCredentialsAreMissing() throws Exception {
+        JobQProperties properties = new JobQProperties();
+        MockMvc missingCredsMvc = buildMockMvc(properties);
+
+        missingCredsMvc.perform(get("/jobq/htmx/stats"))
+                .andExpect(status().isUnauthorized())
+                .andExpect(header().string(HttpHeaders.WWW_AUTHENTICATE, "Basic realm=\"JobQ Dashboard\""));
+    }
+
+    @Test
+    void shouldRequireAuthenticationInSpringSecurityMode() throws Exception {
+        JobQProperties properties = new JobQProperties();
+        properties.getDashboard().setAuthMode(JobQProperties.Dashboard.AuthMode.SPRING_SECURITY);
+        MockMvc mvc = buildMockMvc(properties);
+
+        mvc.perform(get("/jobq/htmx/stats"))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    void shouldReturnForbiddenWhenUserLacksRequiredRoleInSpringSecurityMode() throws Exception {
+        JobQProperties properties = new JobQProperties();
+        properties.getDashboard().setAuthMode(JobQProperties.Dashboard.AuthMode.SPRING_SECURITY);
+        properties.getDashboard().setRequiredRole("JOBQ_DASHBOARD");
+        MockMvc mvc = buildMockMvc(properties);
+
+        mvc.perform(get("/jobq/htmx/stats").with(request -> {
+            request.setUserPrincipal(() -> "alice");
+            request.addUserRole("USER");
+            return request;
+        })).andExpect(status().isForbidden());
+    }
+
+    @Test
+    void shouldAllowUserWithConfiguredRoleInSpringSecurityMode() throws Exception {
+        JobQProperties properties = new JobQProperties();
+        properties.getDashboard().setAuthMode(JobQProperties.Dashboard.AuthMode.SPRING_SECURITY);
+        properties.getDashboard().setRequiredRole("JOBQ_DASHBOARD");
+        MockMvc mvc = buildMockMvc(properties);
+
+        mvc.perform(get("/jobq/htmx/stats").with(request -> {
+            request.setUserPrincipal(() -> "alice");
+            request.addUserRole("JOBQ_DASHBOARD");
+            return request;
+        })).andExpect(status().isOk());
+    }
+
+    @Test
+    void shouldAllowRoleConfiguredWithRolePrefix() throws Exception {
+        JobQProperties properties = new JobQProperties();
+        properties.getDashboard().setAuthMode(JobQProperties.Dashboard.AuthMode.SPRING_SECURITY);
+        properties.getDashboard().setRequiredRole("ROLE_JOBQ_DASHBOARD");
+        MockMvc mvc = buildMockMvc(properties);
+
+        mvc.perform(get("/jobq/htmx/stats").with(request -> {
+            request.setUserPrincipal(() -> "alice");
+            request.addUserRole("JOBQ_DASHBOARD");
+            return request;
+        })).andExpect(status().isOk());
+    }
+
+    @Test
+    void shouldAllowUserRoleWithRolePrefixWhenRequiredRoleIsBare() throws Exception {
+        JobQProperties properties = new JobQProperties();
+        properties.getDashboard().setAuthMode(JobQProperties.Dashboard.AuthMode.SPRING_SECURITY);
+        properties.getDashboard().setRequiredRole("JOBQ_DASHBOARD");
+        MockMvc mvc = buildMockMvc(properties);
+
+        mvc.perform(get("/jobq/htmx/stats").with(request -> {
+            request.setUserPrincipal(() -> "alice");
+            request.addUserRole("ROLE_JOBQ_DASHBOARD");
+            return request;
+        })).andExpect(status().isOk());
     }
 }

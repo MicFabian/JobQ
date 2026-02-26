@@ -1,114 +1,94 @@
-<div align="center">
-  <h1>JobQ 🚀</h1>
-  <p><b>A highly reliable, zero-dependency PostgreSQL Background Job Processing Library for Spring Boot 4</b></p>
-</div>
+# JobQ
 
-JobQ acts as a robust, lightweight replacement for heavy message brokers like RabbitMQ or Redis by leveraging your existing PostgreSQL database to manage background jobs cleanly and transactionally. 
+JobQ is a PostgreSQL-backed background job library for Spring Boot.
 
-Built natively for **Java 25** and **Spring Boot 4**, JobQ automatically takes advantage of PostgreSQL 17 features like `SKIP LOCKED` for highly concurrent queue polling without deadlocks.
+It is designed for teams that want transactional job enqueueing, high concurrency, and operational simplicity without running a separate message broker.
 
----
+## Highlights
 
-## 🌟 Key Features
+- Transactional enqueueing in the same DB transaction as business writes
+- Concurrent polling using `FOR UPDATE SKIP LOCKED`
+- Retry handling with backoff and priority shift strategies
+- Recurring jobs via cron on `@Job`
+- Optional worker type auto-resolution from `@Job` (no `getJobType()` boilerplate)
+- Job grouping (`groupId`) and deduplication (`replaceKey`)
+- Built-in HTMX dashboard (status, payload inspection, restart failed jobs)
+- Built-in Micrometer gauges
+- Automatic retention cleanup for completed/failed jobs
+- Java 25 and Spring Boot 4 support
 
-* **Transactional Consistency**: Save your business data and enqueue a job in the precise same atomic transaction. 
-* **Concurrent & Scalable**: Multiple application instances safely poll jobs simultaneously using PostgreSQL `FOR UPDATE SKIP LOCKED`.
-* **Advanced Routing & Resiliency**: Native support for configurable max retries, fixed/exponential backoffs, and dynamic priority shifting when jobs fail.
-* **Premium HTMX Dashboard**: A completely built-in, standalone glass-morphic web UI complete with live polling, pagination, payload inspection, and security.
-* **Production-Grade Observability**: Turnkey Micrometer `Gauge` metrics natively export your queue statistics to tools like Prometheus.
+## Requirements
 
----
+- Java 25
+- Spring Boot 4
+- PostgreSQL 17+
 
-## 📦 Installation
+## Installation
 
-Add the dependency to your `build.gradle` or `pom.xml`. Since JobQ is a well-behaved Spring Boot Auto-Configuration Starter, you don't need any complex setup out of the box.
-
-**Gradle:**
 ```groovy
 implementation 'com.jobq:jobq-spring-boot-starter:1.0.0'
 ```
 
----
-
-## 🚀 Quick Start Guide
-
-### 1. Configuration (Optional)
-JobQ comes with sensible zero-configuration defaults, including automatic database schema initialization! If you ever need to tune the engine, just open `application.yml`:
+## Configuration
 
 ```yaml
 jobq:
   background-job-server:
-    enabled: true                  # Set to false to disable polling on this node
-    worker-count: 4                # Number of concurrent async threads 
-    poll-interval-in-seconds: 15   # How frequently the local node checks the database
+    enabled: true
+    worker-count: 4
+    poll-interval-in-seconds: 15
     delete-succeeded-jobs-after: 36h
     permanently-delete-deleted-jobs-after: 72h
-  
+
   database:
-    skip-create: false             # Set to true if managing schema with Flyway/Liquibase
-    table-prefix: "my_app_"        # Optional prefix for JobQ tables
-    
+    skip-create: false
+    table-prefix: ""
+
   dashboard:
-    enabled: true                  # Access at /jobq/dashboard 
+    enabled: false
     path: "/jobq/dashboard"
-    username: "admin"              # Simple HTTP Basic Auth protection
-    password: "supersecretpassword"
+    auth-mode: BASIC              # BASIC | SPRING_SECURITY
+    required-role: JOBQ_DASHBOARD # used only in SPRING_SECURITY mode
+    username: ""                  # used only in BASIC mode
+    password: ""                  # used only in BASIC mode
 ```
 
-### 2. Define a Payload
-Jobs execute logic based on data (payloads). Payloads can be any valid POJO or Java Record. JobQ handles JSON serialization automatically.
+## Quick Start
+
+### 1. Define payload
 
 ```java
-public record WelcomeEmailPayload(String emailAddress, String templateId) {}
+public record WelcomeEmailPayload(String email, String template) {}
 ```
 
-
-### 3. Creating a Job Worker
-
-Implement the `JobWorker<T>` interface and annotate your bean with `@Job` to process the jobs. The `@Job` annotation allows you to fine-tune exactly how the job behaves in the event of failures!
+### 2. Implement worker
 
 ```java
 import com.jobq.JobWorker;
 import com.jobq.annotation.Job;
-import com.jobq.annotation.Job.RetryPriority;
 import org.springframework.stereotype.Component;
 
 import java.util.UUID;
 
 @Component
-@Job(
-    value = "SEND_WELCOME_EMAIL", 
-    maxRetries = 5,                 // Try 5 times before failing permanently
-    initialBackoffMs = 2000,        // Wait 2 seconds before the first retry
-    backoffMultiplier = 2.0,        // Exponential backoff: 2s, 4s, 8s, 16s...
-    retryPriority = RetryPriority.LOWER_ON_RETRY // Deprioritize failing jobs behind healthy ones!
-)
+@Job("send-welcome-email")
 public class WelcomeEmailWorker implements JobWorker<WelcomeEmailPayload> {
 
     @Override
-    public String getJobType() {
-        return "SEND_WELCOME_EMAIL";
+    public void process(UUID jobId, WelcomeEmailPayload payload) {
+        // business logic
     }
 
     @Override
     public Class<WelcomeEmailPayload> getPayloadClass() {
         return WelcomeEmailPayload.class;
     }
-
-    @Override
-    public void process(UUID jobId, WelcomeEmailPayload payload) throws Exception {
-        // Your business logic goes here!
-        // If this method throws any Exception, JobQ will catch it, log the error message,
-        // unlock the database row, and schedule the job for a retry using the backoff algorithm.
-        System.out.println("Sending email to: " + payload.emailAddress());
-    }
 }
 ```
 
+`getJobType()` is optional. If not overridden, JobQ uses `@Job("...")`.
 
-### 4. Enqueuing a Job
-
-Simply inject `JobClient` into your services. The real power comes when you call `enqueue` inside an `@Transactional` block. If the transaction rolls back, the job is never scheduled!
+### 3. Enqueue inside a transaction
 
 ```java
 import com.jobq.JobClient;
@@ -119,62 +99,161 @@ import org.springframework.transaction.annotation.Transactional;
 public class UserService {
 
     private final JobClient jobClient;
-    private final UserRepository userRepository;
 
-    public UserService(JobClient jobClient, UserRepository userRepository) {
+    public UserService(JobClient jobClient) {
         this.jobClient = jobClient;
-        this.userRepository = userRepository;
     }
 
     @Transactional
-    public void registerNewUser(String email) {
-        // 1. Save business data
-        User user = new User(email);
-        userRepository.save(user);
-
-        // 2. Enqueue the background job atomically!
-        WelcomeEmailPayload payload = new WelcomeEmailPayload(email, "WELCOME_V1");
-        jobClient.enqueue("SEND_WELCOME_EMAIL", payload);
+    public void register(String email) {
+        // save business data...
+        jobClient.enqueue("send-welcome-email", new WelcomeEmailPayload(email, "default"));
     }
 }
 ```
 
----
+If the transaction rolls back, the job is not persisted.
 
-## 🛠️ Advanced Functionalities
+## Retry, Backoff, Priority
 
-### Advanced Scheduling & Prioritization
-While `JobClient.enqueue(type, payload)` handles the most common use cases and inherits defaults from standard properties, you can also inject `JobClient` and override the number of retries explicitly using `enqueue(String type, Object payload, int maxRetries)`.
-
-Need to run a job in the future? Inject the standard `JobRepository` into your logic, and build the `Job` entity manually setting the `.setRunAt(OffsetDateTime)` property. JobQ will simply ignore the job until the system clock passes the scheduled run time!
-
-### Using the HTMX Dashboard
-JobQ ships with an embedded, lightning-fast dashboard that provides realtime insights into your queues. 
-
-1. Start your Spring Boot application.
-2. Navigate to `http://localhost:8080/jobq/dashboard`.
-3. You'll see an heavily styled, dark-themed UI that streams live job updates atomically via HTMX `hx-trigger` attributes. No complex Javascript required!
-   
-**Securing the Dashboard**
-By default, the dashboard is open. To secure it, simply add the following properties:
-```yaml
-jobq.dashboard.username=admin
-jobq.dashboard.password=secure123
+```java
+@Job(
+    value = "sync-customer",
+    maxRetries = 5,
+    initialBackoffMs = 1000,
+    backoffMultiplier = 2.0,
+    retryPriority = Job.RetryPriority.LOWER_ON_RETRY
+)
 ```
-This enables an isolated HTTP Basic Auth Interceptor solely for `/jobq/**` paths, keeping your dashboard locked down without relying on immense overheads of heavy security architectures. 
 
-### Micrometer Observability & Statistics
-If `io.micrometer:micrometer-core` is present on your classpath (e.g. via `spring-boot-starter-actuator`), JobQ explicitly registers Native Gauges seamlessly using Spring Boot's internal `MeterRegistry`.
-* `jobq.jobs.total`: The total count of jobs in the cluster.
-* `jobq.jobs.count` (Tag: `status=PENDING|PROCESSING|COMPLETED|FAILED`): The exact count of jobs currently resting in each respective state.
+When processing throws a non-whitelisted exception:
 
-These metrics auto-refresh continuously and plug perfectly into your existing Grafana or Prometheus dashboards.
+- `retryCount` is incremented
+- job is moved back to `PENDING` with backoff (until retries are exhausted)
+- job becomes `FAILED` when retries are exceeded
 
----
+## Expected Exceptions (Whitelist)
 
-## 🧹 Housekeeping
-JobQ operates a discrete background sweeper task using standard Spring `@Scheduled` functions. It will automatically sweep and purge:
-* Successfully processed (`COMPLETED`) jobs after `36h`. 
-* Permanently `FAILED` jobs after `72h`.
+If a worker throws an exception that represents an expected business outcome, whitelist it in `@Job`.
 
-No bloating, no maintenance, zero headaches.
+```java
+@Job(
+    value = "sync-customer",
+    expectedExceptions = {CustomerAlreadySyncedException.class}
+)
+```
+
+If one of these exceptions is thrown:
+
+- job is marked `COMPLETED`
+- `retryCount` is not incremented
+- no retry is scheduled
+
+## Recurring Jobs
+
+```java
+@Job(value = "cleanup-temp-files", cron = "0 0 * * * *")
+```
+
+Behavior:
+
+- On startup, JobQ bootstraps recurring jobs if no active execution exists
+- After a successful run, JobQ schedules the next run from the cron expression
+
+## Grouping and Deduplication
+
+### Grouping
+
+```java
+jobClient.enqueue("generate-report", payload, "reports");
+```
+
+### Deduplication (`replaceKey`)
+
+```java
+jobClient.enqueue("generate-report", payload, "reports", "customer-123");
+```
+
+If a `PENDING` job exists with the same `(type, replaceKey)`, JobQ updates that existing row instead of creating another.
+
+## Dashboard
+
+Enable with:
+
+```yaml
+jobq:
+  dashboard:
+    enabled: true
+```
+
+Default route: `/jobq/dashboard` (configurable with `jobq.dashboard.path`).
+
+Features:
+
+- live stats
+- paged job listing
+- payload/details view
+- restart failed jobs
+
+### Dashboard Security (Never Open)
+
+JobQ dashboard endpoints are always protected when dashboard is enabled.
+
+#### Mode 1: `BASIC` (default)
+
+- If both `jobq.dashboard.username` and `jobq.dashboard.password` are set:
+  - those credentials are used
+  - no startup credential log is emitted
+- If either is missing:
+  - JobQ generates random username/password at startup
+  - generated credentials are logged once at startup
+
+#### Mode 2: `SPRING_SECURITY`
+
+- JobQ does not use Basic Auth credentials in this mode
+- Request must be authenticated by your project’s Spring Security setup
+- Authenticated user must have `jobq.dashboard.required-role` (default: `JOBQ_DASHBOARD`)
+  - role value may be configured with or without `ROLE_` prefix
+
+Example:
+
+```yaml
+jobq:
+  dashboard:
+    enabled: true
+    auth-mode: SPRING_SECURITY
+    required-role: JOBQ_DASHBOARD
+```
+
+In this mode, no credentials are auto-generated or logged by JobQ.
+
+## Metrics
+
+When Micrometer is on the classpath, JobQ registers:
+
+- `jobq.jobs.total`
+- `jobq.jobs.count{status="PENDING|PROCESSING|COMPLETED|FAILED"}`
+
+## Schema
+
+JobQ can auto-initialize schema from `jobq-schema.sql`.
+
+Main table: `jobq_jobs`
+
+Important columns:
+
+- `processing_started_at`, `finished_at`, `failed_at`
+- `retry_count`, `max_retries`, `priority`, `run_at`
+- `group_id`, `replace_key`, `cron`
+
+Important indexes:
+
+- polling index for efficient lock/poll
+- group index
+- unique partial index on `(type, replace_key)` for `PENDING` rows
+
+## Design Notes
+
+- No external broker required
+- Works well with multiple app instances
+- Uses DB-level locking primitives for safe concurrent workers

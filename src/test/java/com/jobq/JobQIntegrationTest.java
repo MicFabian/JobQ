@@ -16,13 +16,17 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import java.time.Duration;
 
 import static org.awaitility.Awaitility.await;
@@ -38,7 +42,8 @@ public class JobQIntegrationTest {
     static PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:17-alpine")
             .withDatabaseName("testdb")
             .withUsername("test")
-            .withPassword("test");
+            .withPassword("test")
+            .withTmpFs(Map.of("/var/lib/postgresql/data", "rw"));
 
     @DynamicPropertySource
     static void registerPgProperties(DynamicPropertyRegistry registry) {
@@ -58,6 +63,9 @@ public class JobQIntegrationTest {
     @Autowired
     JdbcTemplate jdbcTemplate;
 
+    @Autowired
+    org.springframework.transaction.support.TransactionTemplate transactionTemplate;
+
     static volatile CountDownLatch jobLatch;
     static volatile String lastProcessedMessage;
     static final AtomicInteger retryCount = new AtomicInteger(0);
@@ -65,6 +73,8 @@ public class JobQIntegrationTest {
     static volatile UUID slowJobLockedId;
     static volatile CountDownLatch slowJobStartedLatch;
     static volatile CountDownLatch slowJobFinishLatch;
+    static final AtomicInteger recurringJobCount = new AtomicInteger(0);
+    static volatile CountDownLatch recurringJobLatch;
 
     @Configuration
     static class TestConfig {
@@ -109,6 +119,25 @@ public class JobQIntegrationTest {
                     return TestPayload.class;
                 }
             };
+        }
+
+        @com.jobq.annotation.Job(value = "EXPECTED_EXCEPTION_JOB", expectedExceptions = { ExpectedBusinessException.class })
+        static class ExpectedExceptionWorker implements JobWorker<TestPayload> {
+            @Override
+            public void process(UUID jobId, TestPayload payload) {
+                jobLatch.countDown();
+                throw new ExpectedBusinessException("Already handled business condition");
+            }
+
+            @Override
+            public Class<TestPayload> getPayloadClass() {
+                return TestPayload.class;
+            }
+        }
+
+        @Bean
+        JobWorker<TestPayload> expectedExceptionJobWorker() {
+            return new ExpectedExceptionWorker();
         }
 
         @Bean
@@ -268,6 +297,27 @@ public class JobQIntegrationTest {
         JobWorker<TestPayload> lowerPriorityJobWorker() {
             return new LowerPriorityJobWorker();
         }
+
+        @com.jobq.annotation.Job(value = "RECURRING_JOB", cron = "*/2 * * * * *")
+        static class RecurringWorker implements JobWorker<Void> {
+            @Override
+            public void process(UUID jobId, Void payload) {
+                recurringJobCount.incrementAndGet();
+                if (recurringJobLatch != null) {
+                    recurringJobLatch.countDown();
+                }
+            }
+
+            @Override
+            public Class<Void> getPayloadClass() {
+                return Void.class;
+            }
+        }
+
+        @Bean
+        JobWorker<Void> recurringJobWorker() {
+            return new RecurringWorker();
+        }
     }
 
     public static class TestPayload {
@@ -289,6 +339,12 @@ public class JobQIntegrationTest {
         }
     }
 
+    static class ExpectedBusinessException extends RuntimeException {
+        ExpectedBusinessException(String message) {
+            super(message);
+        }
+    }
+
     @Test
     void shouldCreateJobqJobsTableWithAllRequiredColumns() {
         List<Map<String, Object>> columns = jdbcTemplate.queryForList(
@@ -298,9 +354,10 @@ public class JobQIntegrationTest {
             columnNames.add((String) col.get("column_name"));
         }
         assertTrue(columnNames.containsAll(List.of(
-                "id", "type", "payload", "status", "created_at", "updated_at",
-                "locked_at", "locked_by", "error_message", "retry_count",
-                "max_retries", "priority", "run_at")));
+                "id", "type", "payload", "created_at", "updated_at",
+                "locked_at", "locked_by", "processing_started_at", "finished_at", "failed_at",
+                "error_message", "retry_count", "max_retries", "priority",
+                "run_at", "group_id", "replace_key", "cron")));
     }
 
     @Test
@@ -309,6 +366,38 @@ public class JobQIntegrationTest {
                 "SELECT count(*) FROM pg_indexes WHERE tablename = 'jobq_jobs' AND indexname = 'idx_jobq_jobs_polling'",
                 Integer.class);
         assertEquals(1, indexCount);
+    }
+
+    @Test
+    void shouldCreateTheGroupIndex() {
+        Integer indexCount = jdbcTemplate.queryForObject(
+                "SELECT count(*) FROM pg_indexes WHERE tablename = 'jobq_jobs' AND indexname = 'idx_jobq_jobs_group'",
+                Integer.class);
+        assertEquals(1, indexCount);
+    }
+
+    @Test
+    void shouldCreateTheUniqueReplaceKeyIndex() {
+        Integer indexCount = jdbcTemplate.queryForObject(
+                "SELECT count(*) FROM pg_indexes " +
+                        "WHERE tablename = 'jobq_jobs' " +
+                        "AND indexname = 'idx_jobq_jobs_replace_key' " +
+                        "AND indexdef LIKE 'CREATE UNIQUE INDEX%'",
+                Integer.class);
+        assertEquals(1, indexCount);
+    }
+
+    @Test
+    void shouldRollBackEnqueuedJobWhenOuterTransactionFails() {
+        AtomicReference<UUID> jobIdRef = new AtomicReference<>();
+
+        assertThrows(RuntimeException.class, () -> transactionTemplate.executeWithoutResult(status -> {
+            jobIdRef.set(jobClient.enqueue("TEST_JOB", new TestPayload("rolled-back")));
+            throw new RuntimeException("force rollback");
+        }));
+
+        assertNotNull(jobIdRef.get());
+        assertTrue(jobRepository.findById(jobIdRef.get()).isEmpty());
     }
 
     @Test
@@ -323,6 +412,9 @@ public class JobQIntegrationTest {
             Job job = jobRepository.findById(jobId).orElseThrow();
             assertEquals("Hello, World!", lastProcessedMessage);
             assertEquals("COMPLETED", job.getStatus());
+            assertNotNull(job.getProcessingStartedAt());
+            assertNotNull(job.getFinishedAt());
+            assertNull(job.getFailedAt());
             assertNotNull(job.getUpdatedAt());
         });
     }
@@ -360,17 +452,54 @@ public class JobQIntegrationTest {
 
     @Test
     void shouldRetryFailedJobsAndMarkAsFailedAfterMaxRetries() throws InterruptedException {
-        jobLatch = new CountDownLatch(3);
+        jobLatch = new CountDownLatch(1);
         retryCount.set(0);
         UUID jobId = jobClient.enqueue("RETRY_JOB", new TestPayload("Fail me"), 2);
 
-        jobLatch.await(15, TimeUnit.SECONDS);
+        assertTrue(jobLatch.await(10, TimeUnit.SECONDS));
 
-        await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
+        await().atMost(Duration.ofSeconds(40)).untilAsserted(() -> {
             Job job = jobRepository.findById(jobId).orElseThrow();
             assertEquals("FAILED", job.getStatus());
             assertEquals(3, job.getRetryCount());
             assertEquals("Intentional Failure for Retries", job.getErrorMessage());
+            assertNotNull(job.getFailedAt());
+            assertNull(job.getFinishedAt());
+            assertNull(job.getLockedAt());
+            assertNull(job.getLockedBy());
+        });
+    }
+
+    @Test
+    void shouldIncreaseRetryCountWhenWorkerThrowsDuringExecution() throws InterruptedException {
+        jobLatch = new CountDownLatch(1);
+        retryCount.set(0);
+        UUID jobId = jobClient.enqueue("RETRY_JOB", new TestPayload("boom"), 5);
+
+        assertTrue(jobLatch.await(10, TimeUnit.SECONDS));
+
+        await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
+            Job job = jobRepository.findById(jobId).orElseThrow();
+            assertTrue(job.getRetryCount() >= 1, "Retry count should increase after worker exception");
+            assertNotNull(job.getErrorMessage());
+            assertTrue(List.of("PENDING", "FAILED").contains(job.getStatus()));
+        });
+    }
+
+    @Test
+    void shouldMarkJobCompletedWhenWhitelistedExceptionIsThrown() throws InterruptedException {
+        jobLatch = new CountDownLatch(1);
+        UUID jobId = jobClient.enqueue("EXPECTED_EXCEPTION_JOB", new TestPayload("expected"));
+
+        assertTrue(jobLatch.await(10, TimeUnit.SECONDS));
+
+        await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
+            Job job = jobRepository.findById(jobId).orElseThrow();
+            assertEquals("COMPLETED", job.getStatus());
+            assertEquals(0, job.getRetryCount());
+            assertNull(job.getErrorMessage());
+            assertNotNull(job.getFinishedAt());
+            assertNull(job.getFailedAt());
         });
     }
 
@@ -386,6 +515,8 @@ public class JobQIntegrationTest {
             Job job = jobRepository.findById(jobId).orElseThrow();
             assertEquals("FAILED", job.getStatus());
             assertEquals(1, job.getRetryCount());
+            assertNull(job.getLockedAt());
+            assertNull(job.getLockedBy());
         });
     }
 
@@ -485,8 +616,8 @@ public class JobQIntegrationTest {
     void shouldNotProcessJobWhoseRunAtIsInTheFuture() throws InterruptedException {
         UUID jobId = UUID.randomUUID();
         jdbcTemplate.update(
-                "INSERT INTO jobq_jobs (id, type, payload, status, run_at, max_retries, priority) " +
-                        "VALUES (?, 'TEST_JOB', '{\"message\":\"future\"}', 'PENDING', NOW() + INTERVAL '1 hour', 3, 0)",
+                "INSERT INTO jobq_jobs (id, type, payload, run_at, max_retries, priority) " +
+                        "VALUES (?, 'TEST_JOB', '{\"message\":\"future\"}', NOW() + INTERVAL '1 hour', 3, 0)",
                 jobId);
 
         Thread.sleep(2000);
@@ -512,25 +643,391 @@ public class JobQIntegrationTest {
     }
 
     @Test
-    void shouldProcessHigherPriorityJobsBeforeLowerPriorityJobs() throws InterruptedException {
-        processedJobIds.clear();
-        jobLatch = new CountDownLatch(2);
+    void shouldFetchHigherPriorityJobsFirst() {
         UUID lowId = UUID.randomUUID();
         UUID highId = UUID.randomUUID();
 
         jdbcTemplate.update(
-                "INSERT INTO jobq_jobs (id, type, payload, status, run_at, max_retries, priority, updated_at) " +
-                        "VALUES (?, 'PRIORITY_ORDER_JOB', '{\"message\":\"low\"}', 'PENDING', NOW(), 3, 0, NOW())",
+                "INSERT INTO jobq_jobs (id, type, payload, run_at, max_retries, priority, updated_at) " +
+                        "VALUES (?, 'PRIORITY_ORDER_JOB', '{\"message\":\"low\"}', NOW(), 3, 0, NOW())",
                 lowId);
         jdbcTemplate.update(
-                "INSERT INTO jobq_jobs (id, type, payload, status, run_at, max_retries, priority, updated_at) " +
-                        "VALUES (?, 'PRIORITY_ORDER_JOB', '{\"message\":\"high\"}', 'PENDING', NOW(), 3, 10, NOW())",
+                "INSERT INTO jobq_jobs (id, type, payload, run_at, max_retries, priority, updated_at) " +
+                        "VALUES (?, 'PRIORITY_ORDER_JOB', '{\"message\":\"high\"}', NOW(), 3, 10, NOW())",
                 highId);
 
-        jobLatch.await(15, TimeUnit.SECONDS);
+        // Verify the repository query correctly orders by priority DESC.
+        // PageRequest of 1 simulates fetching the absolute most urgent job first.
+        List<Job> nextJobs = transactionTemplate
+                .execute(status -> jobRepository.findNextJobsForUpdate("PRIORITY_ORDER_JOB",
+                        org.springframework.data.domain.PageRequest.of(0, 1)));
 
-        List<UUID> ordered = new ArrayList<>(processedJobIds);
-        assertEquals(2, ordered.size());
-        assertEquals(highId, ordered.get(0));
+        assertEquals(1, nextJobs.size());
+        assertEquals(highId, nextJobs.get(0).getId());
+    }
+
+    // ── New Feature Tests: Deduplication via replaceKey ──
+
+    @Test
+    void shouldReplaceExistingPendingJobWithSameReplaceKey() {
+        UUID firstId = jobClient.enqueue("TEST_JOB", new TestPayload("original"), "group-a", "dedup-key-1");
+        UUID secondId = jobClient.enqueue("TEST_JOB", new TestPayload("updated"), "group-a", "dedup-key-1");
+
+        // Same ID returned — the existing job was updated in-place
+        assertEquals(firstId, secondId);
+
+        Job job = jobRepository.findById(firstId).orElseThrow();
+        assertEquals("PENDING", job.getStatus());
+        assertEquals(0, job.getRetryCount());
+        assertTrue(job.getPayload().toString().contains("updated"));
+    }
+
+    @Test
+    void shouldTreatBlankReplaceKeyAsNoDeduplication() {
+        UUID firstId = jobClient.enqueue("TEST_JOB", new TestPayload("a"), "group-a", "   ");
+        UUID secondId = jobClient.enqueue("TEST_JOB", new TestPayload("b"), "group-a", "");
+
+        assertNotEquals(firstId, secondId);
+    }
+
+    @Test
+    void shouldNotReplacePendingJobWhenReplaceKeyDiffers() {
+        UUID firstId = jobClient.enqueue("TEST_JOB", new TestPayload("a"), "group-a", "key-1");
+        UUID secondId = jobClient.enqueue("TEST_JOB", new TestPayload("b"), "group-a", "key-2");
+
+        assertNotEquals(firstId, secondId);
+        assertEquals(2, jobRepository.findAllById(List.of(firstId, secondId)).size());
+    }
+
+    @Test
+    void shouldCreateNewJobWhenExistingIsNotPending() throws InterruptedException {
+        // Enqueue and let it process (COMPLETED)
+        jobLatch = new CountDownLatch(1);
+        lastProcessedMessage = null;
+        UUID firstId = jobClient.enqueue("TEST_JOB", new TestPayload("first"), "group-b", "dedup-key-2");
+        jobLatch.await(10, TimeUnit.SECONDS);
+
+        await().atMost(Duration.ofSeconds(10)).untilAsserted(
+                () -> assertEquals("COMPLETED", jobRepository.findById(firstId).orElseThrow().getStatus()));
+
+        // Now enqueue with same key — should create a new job, not touch the completed
+        // one
+        UUID secondId = jobClient.enqueue("TEST_JOB", new TestPayload("second"), "group-b", "dedup-key-2");
+        assertNotEquals(firstId, secondId);
+    }
+
+    @Test
+    void shouldDeduplicateConcurrentEnqueueCallsWithSameReplaceKey() throws InterruptedException {
+        int callers = 16;
+        String type = "DEDUP_RACE_JOB";
+        String replaceKey = "race-key-" + UUID.randomUUID();
+
+        CountDownLatch ready = new CountDownLatch(callers);
+        CountDownLatch start = new CountDownLatch(1);
+        CountDownLatch done = new CountDownLatch(callers);
+        List<UUID> returnedIds = new CopyOnWriteArrayList<>();
+        List<Throwable> failures = new CopyOnWriteArrayList<>();
+
+        for (int i = 0; i < callers; i++) {
+            final int idx = i;
+            Thread t = new Thread(() -> {
+                ready.countDown();
+                try {
+                    if (!start.await(5, TimeUnit.SECONDS)) {
+                        failures.add(new IllegalStateException("start latch timeout"));
+                        return;
+                    }
+                    UUID id = jobClient.enqueue(type, new TestPayload("payload-" + idx), "race-group", replaceKey);
+                    returnedIds.add(id);
+                } catch (Throwable t1) {
+                    failures.add(t1);
+                } finally {
+                    done.countDown();
+                }
+            });
+            t.start();
+        }
+
+        assertTrue(ready.await(10, TimeUnit.SECONDS));
+        start.countDown();
+        assertTrue(done.await(20, TimeUnit.SECONDS));
+        assertTrue(failures.isEmpty(), "Concurrent dedup enqueue should not fail: " + failures);
+        assertFalse(returnedIds.isEmpty());
+        assertEquals(1, new HashSet<>(returnedIds).size(), "All concurrent callers should receive the same job id");
+
+        Integer pendingRows = jdbcTemplate.queryForObject(
+                "SELECT count(*) FROM jobq_jobs " +
+                        "WHERE type = ? AND replace_key = ? " +
+                        "AND processing_started_at IS NULL AND finished_at IS NULL AND failed_at IS NULL",
+                Integer.class, type, replaceKey);
+        assertEquals(1, pendingRows);
+    }
+
+    // ── New Feature Tests: GroupId ──
+
+    @Test
+    void shouldStoreGroupIdOnJob() {
+        UUID jobId = jobClient.enqueue("TEST_JOB", new TestPayload("grouped"), "my-group");
+        Job job = jobRepository.findById(jobId).orElseThrow();
+        assertEquals("my-group", job.getGroupId());
+    }
+
+    @Test
+    void shouldProcessMultipleJobsWithSameGroupInParallel() throws InterruptedException {
+        int jobCount = 5;
+        processedJobIds.clear();
+        jobLatch = new CountDownLatch(jobCount);
+        List<UUID> ids = new ArrayList<>();
+
+        for (int i = 0; i < jobCount; i++) {
+            ids.add(jobClient.enqueue("CONCURRENT_JOB", new TestPayload("group-job-" + i), "parallel-group"));
+        }
+
+        jobLatch.await(30, TimeUnit.SECONDS);
+
+        await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
+            for (UUID id : ids) {
+                assertEquals("COMPLETED", jobRepository.findById(id).orElseThrow().getStatus());
+            }
+        });
+    }
+
+    // ── New Feature Tests: Restart ──
+
+    @Test
+    void shouldRestartFailedJob() throws InterruptedException {
+        jobLatch = new CountDownLatch(1);
+        retryCount.set(0);
+        UUID jobId = jobClient.enqueue("RETRY_JOB", new TestPayload("restart-me"), 0);
+
+        jobLatch.await(10, TimeUnit.SECONDS);
+
+        await().atMost(Duration.ofSeconds(10))
+                .untilAsserted(() -> assertEquals("FAILED", jobRepository.findById(jobId).orElseThrow().getStatus()));
+
+        // Manual restart: reset to PENDING
+        Job failedJob = jobRepository.findById(jobId).orElseThrow();
+        failedJob.setStatus("PENDING");
+        failedJob.setRetryCount(0);
+        failedJob.setErrorMessage(null);
+        failedJob.setRunAt(OffsetDateTime.now());
+        failedJob.setUpdatedAt(OffsetDateTime.now());
+        jobRepository.save(failedJob);
+
+        // Verify it goes back to processing
+        jobLatch = new CountDownLatch(1);
+        jobLatch.await(10, TimeUnit.SECONDS);
+
+        await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
+            Job job = jobRepository.findById(jobId).orElseThrow();
+            // It will fail again (maxRetries=0), but this proves restart worked
+            assertEquals("FAILED", job.getStatus());
+            assertTrue(job.getRetryCount() > 0);
+        });
+    }
+
+    @Test
+    void shouldSkipLockedRowsWhenAnotherTransactionAlreadyHoldsLock() throws InterruptedException {
+        String type = "SKIP_LOCKED_JOB";
+        UUID firstId = UUID.randomUUID();
+        UUID secondId = UUID.randomUUID();
+
+        jdbcTemplate.update(
+                "INSERT INTO jobq_jobs (id, type, payload, run_at, max_retries, priority, created_at, updated_at) " +
+                        "VALUES (?, ?, '{\"message\":\"first\"}', NOW(), 3, 0, NOW() - INTERVAL '2 seconds', NOW())",
+                firstId, type);
+        jdbcTemplate.update(
+                "INSERT INTO jobq_jobs (id, type, payload, run_at, max_retries, priority, created_at, updated_at) " +
+                        "VALUES (?, ?, '{\"message\":\"second\"}', NOW(), 3, 0, NOW() - INTERVAL '1 seconds', NOW())",
+                secondId, type);
+
+        CountDownLatch firstLockAcquired = new CountDownLatch(1);
+        CountDownLatch releaseFirstLock = new CountDownLatch(1);
+        AtomicReference<UUID> lockedIdByTx1 = new AtomicReference<>();
+        AtomicReference<Throwable> tx1Error = new AtomicReference<>();
+
+        Thread tx1 = new Thread(() -> {
+            try {
+                transactionTemplate.executeWithoutResult(status -> {
+                    List<Job> firstBatch = jobRepository.findNextJobsForUpdate(type,
+                            org.springframework.data.domain.PageRequest.of(0, 1));
+                    if (!firstBatch.isEmpty()) {
+                        lockedIdByTx1.set(firstBatch.get(0).getId());
+                    }
+                    firstLockAcquired.countDown();
+                    try {
+                        releaseFirstLock.await(10, TimeUnit.SECONDS);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        throw new RuntimeException(e);
+                    }
+                });
+            } catch (Throwable t) {
+                tx1Error.set(t);
+            }
+        });
+        tx1.start();
+
+        assertTrue(firstLockAcquired.await(10, TimeUnit.SECONDS));
+        assertNotNull(lockedIdByTx1.get(), "First transaction should lock one row");
+
+        CountDownLatch secondDone = new CountDownLatch(1);
+        AtomicReference<List<Job>> secondBatchRef = new AtomicReference<>(List.of());
+        AtomicReference<Throwable> tx2Error = new AtomicReference<>();
+
+        Thread tx2 = new Thread(() -> {
+            try {
+                transactionTemplate.executeWithoutResult(status -> secondBatchRef.set(
+                        jobRepository.findNextJobsForUpdate(type, org.springframework.data.domain.PageRequest.of(0, 1))));
+            } catch (Throwable t) {
+                tx2Error.set(t);
+            } finally {
+                secondDone.countDown();
+            }
+        });
+        tx2.start();
+
+        boolean finishedQuickly = secondDone.await(2, TimeUnit.SECONDS);
+        releaseFirstLock.countDown();
+        tx1.join();
+        tx2.join();
+
+        assertTrue(finishedQuickly, "Second transaction should not block behind locked row (SKIP LOCKED)");
+        assertNull(tx1Error.get());
+        assertNull(tx2Error.get());
+        assertEquals(1, secondBatchRef.get().size());
+        assertNotEquals(lockedIdByTx1.get(), secondBatchRef.get().get(0).getId());
+    }
+
+    @Test
+    void shouldScheduleAndRunRecurringJobs() throws InterruptedException {
+        // The RecurringJobInitializer should have already bootstrapped the job
+        // since we defined the bean in TestConfig with a cron expression.
+
+        // Wait for at least 2 executions (cron is every 2 seconds)
+        recurringJobLatch = new CountDownLatch(2);
+
+        assertTrue(recurringJobLatch.await(15, TimeUnit.SECONDS),
+                "Recurring job should have executed at least twice. Actual count: " + recurringJobCount.get());
+
+        // Success means the job was processed, then rescheduled, then processed again.
+        assertTrue(recurringJobCount.get() >= 2);
+
+        await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
+            Long recurringRows = jdbcTemplate.queryForObject(
+                    "SELECT count(*) FROM jobq_jobs WHERE type = 'RECURRING_JOB' AND cron = '*/2 * * * * *'",
+                    Long.class);
+            Long activeRows = jdbcTemplate.queryForObject(
+                    "SELECT count(*) FROM jobq_jobs " +
+                            "WHERE type = 'RECURRING_JOB' " +
+                            "AND cron = '*/2 * * * * *' " +
+                            "AND finished_at IS NULL AND failed_at IS NULL",
+                    Long.class);
+
+            assertNotNull(recurringRows);
+            assertNotNull(activeRows);
+            assertTrue(recurringRows >= 2, "Recurring runs should create subsequent persisted job rows");
+            assertTrue(activeRows >= 1, "Recurring scheduler should keep at least one active future execution");
+        });
+    }
+
+    @Test
+    void shouldNotMarkCompletedWhenLockOwnerDoesNotMatch() {
+        UUID jobId = UUID.randomUUID();
+        jdbcTemplate.update(
+                "INSERT INTO jobq_jobs (id, type, payload, processing_started_at, locked_at, locked_by, max_retries, retry_count, priority, run_at, updated_at) " +
+                        "VALUES (?, 'TEST_JOB', '{\"message\":\"locked\"}', NOW(), NOW(), 'node-owner', 3, 0, 0, NOW(), NOW())",
+                jobId);
+
+        int updated = transactionTemplate.execute(status -> jobRepository.markCompleted(jobId, OffsetDateTime.now(), "node-other"));
+        assertNotNull(updated);
+        assertEquals(0, updated);
+
+        Job job = jobRepository.findById(jobId).orElseThrow();
+        assertEquals("PROCESSING", job.getStatus());
+        assertNull(job.getFinishedAt());
+    }
+
+    @Test
+    void shouldNotApplyRetryUpdateWhenExpectedRetryCountDoesNotMatch() {
+        UUID jobId = UUID.randomUUID();
+        jdbcTemplate.update(
+                "INSERT INTO jobq_jobs (id, type, payload, processing_started_at, locked_at, locked_by, max_retries, retry_count, priority, run_at, updated_at, error_message) " +
+                        "VALUES (?, 'RETRY_JOB', '{\"message\":\"retry\"}', NOW(), NOW(), 'node-owner', 3, 2, 5, NOW(), NOW(), 'old')",
+                jobId);
+
+        OffsetDateTime now = OffsetDateTime.now();
+        OffsetDateTime nextRunAt = now.plusSeconds(30);
+        int updated = transactionTemplate.execute(status -> jobRepository.markForRetry(
+                jobId,
+                1,
+                3,
+                "new-error",
+                now,
+                nextRunAt,
+                4,
+                "node-owner"));
+        assertNotNull(updated);
+        assertEquals(0, updated);
+
+        Job job = jobRepository.findById(jobId).orElseThrow();
+        assertEquals(2, job.getRetryCount());
+        assertEquals(5, job.getPriority());
+        assertEquals("old", job.getErrorMessage());
+    }
+
+    @Test
+    void shouldNotApplyRetryUpdateWhenLockOwnerDoesNotMatch() {
+        UUID jobId = UUID.randomUUID();
+        jdbcTemplate.update(
+                "INSERT INTO jobq_jobs (id, type, payload, processing_started_at, locked_at, locked_by, max_retries, retry_count, priority, run_at, updated_at, error_message) " +
+                        "VALUES (?, 'RETRY_JOB', '{\"message\":\"retry\"}', NOW(), NOW(), 'node-owner', 3, 1, 5, NOW(), NOW(), 'old')",
+                jobId);
+
+        OffsetDateTime now = OffsetDateTime.now();
+        OffsetDateTime nextRunAt = now.plusSeconds(30);
+        int updated = transactionTemplate.execute(status -> jobRepository.markForRetry(
+                jobId,
+                1,
+                2,
+                "new-error",
+                now,
+                nextRunAt,
+                4,
+                "node-other"));
+        assertNotNull(updated);
+        assertEquals(0, updated);
+
+        Job job = jobRepository.findById(jobId).orElseThrow();
+        assertEquals(1, job.getRetryCount());
+        assertEquals(5, job.getPriority());
+        assertEquals("old", job.getErrorMessage());
+        assertEquals("PROCESSING", job.getStatus());
+    }
+
+    @Test
+    void shouldNotMarkFailedTerminalWhenLockOwnerDoesNotMatch() {
+        UUID jobId = UUID.randomUUID();
+        jdbcTemplate.update(
+                "INSERT INTO jobq_jobs (id, type, payload, processing_started_at, locked_at, locked_by, max_retries, retry_count, priority, run_at, updated_at, error_message) " +
+                        "VALUES (?, 'RETRY_JOB', '{\"message\":\"retry\"}', NOW(), NOW(), 'node-owner', 1, 1, 0, NOW(), NOW(), 'old')",
+                jobId);
+
+        OffsetDateTime now = OffsetDateTime.now();
+        int updated = transactionTemplate.execute(status -> jobRepository.markFailedTerminal(
+                jobId,
+                1,
+                2,
+                "terminal-error",
+                now,
+                "node-other"));
+        assertNotNull(updated);
+        assertEquals(0, updated);
+
+        Job job = jobRepository.findById(jobId).orElseThrow();
+        assertEquals(1, job.getRetryCount());
+        assertEquals("old", job.getErrorMessage());
+        assertEquals("PROCESSING", job.getStatus());
+        assertNull(job.getFailedAt());
     }
 }

@@ -12,6 +12,7 @@ import org.springframework.data.domain.Sort;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -22,7 +23,7 @@ import java.util.UUID;
 
 @RestController
 @RequestMapping("/jobq/htmx")
-@ConditionalOnProperty(prefix = "jobq.dashboard", name = "enabled", havingValue = "true", matchIfMissing = true)
+@ConditionalOnProperty(prefix = "jobq.dashboard", name = "enabled", havingValue = "true")
 public class JobQDashboardController {
 
     private final JobRepository jobRepository;
@@ -37,21 +38,12 @@ public class JobQDashboardController {
 
     @GetMapping(value = "/stats", produces = MediaType.TEXT_HTML_VALUE)
     public String getStats(@RequestParam(name = "filter", required = false, defaultValue = "") String filter) {
-        long pending = 0;
-        long processing = 0;
-        long completed = 0;
-        long failed = 0;
-        long total = jobRepository.count();
-
-        List<Job> allJobs = jobRepository.findAll();
-        for (Job job : allJobs) {
-            switch (job.getStatus()) {
-                case "PENDING" -> pending++;
-                case "PROCESSING" -> processing++;
-                case "COMPLETED" -> completed++;
-                case "FAILED" -> failed++;
-            }
-        }
+        String normalizedFilter = normalizeStatus(filter);
+        long pending = jobRepository.countPendingJobs();
+        long processing = jobRepository.countProcessingJobs();
+        long completed = jobRepository.countCompletedJobs();
+        long failed = jobRepository.countFailedJobs();
+        long total = pending + processing + completed + failed;
 
         return """
                 <div class="grid grid-cols-2 lg:grid-cols-5 gap-4 mb-8">
@@ -62,14 +54,14 @@ public class JobQDashboardController {
                     %s
                 </div>
                 """.formatted(
-                statCard("Total Jobs", total, "", filter, "ring-indigo-500", "text-slate-500", ""),
-                statCard("Pending", pending, "PENDING", filter, "ring-blue-500", "text-blue-500",
+                statCard("Total Jobs", total, "", normalizedFilter, "ring-indigo-500", "text-slate-500", ""),
+                statCard("Pending", pending, "PENDING", normalizedFilter, "ring-blue-500", "text-blue-500",
                         "<svg class='w-4 h-4' fill='none' stroke='currentColor' viewBox='0 0 24 24'><path stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z'></path></svg>"),
-                statCard("Processing", processing, "PROCESSING", filter, "ring-amber-500", "text-amber-500",
+                statCard("Processing", processing, "PROCESSING", normalizedFilter, "ring-amber-500", "text-amber-500",
                         "<svg class='w-4 h-4' fill='none' stroke='currentColor' viewBox='0 0 24 24'><path stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15'></path></svg>"),
-                statCard("Completed", completed, "COMPLETED", filter, "ring-emerald-500", "text-emerald-500",
+                statCard("Completed", completed, "COMPLETED", normalizedFilter, "ring-emerald-500", "text-emerald-500",
                         "<svg class='w-4 h-4' fill='none' stroke='currentColor' viewBox='0 0 24 24'><path stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M5 13l4 4L19 7'></path></svg>"),
-                statCard("Failed", failed, "FAILED", filter, "ring-rose-500", "text-rose-500",
+                statCard("Failed", failed, "FAILED", normalizedFilter, "ring-rose-500", "text-rose-500",
                         "<svg class='w-4 h-4' fill='none' stroke='currentColor' viewBox='0 0 24 24'><path stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z'></path></svg>"));
     }
 
@@ -95,11 +87,16 @@ public class JobQDashboardController {
             @RequestParam(name = "page", defaultValue = "0") int page,
             @RequestParam(name = "size", defaultValue = "50") int size,
             @RequestParam(name = "status", required = false, defaultValue = "") String status) {
+        String normalizedStatus = normalizeStatus(status);
 
         PageRequest pageRequest = PageRequest.of(page, size, Sort.by(Sort.Direction.DESC, "createdAt"));
-        Page<Job> jobsPage = (!status.isBlank())
-                ? jobRepository.findByStatus(status, pageRequest)
-                : jobRepository.findAll(pageRequest);
+        Page<Job> jobsPage = switch (normalizedStatus) {
+            case "PENDING" -> jobRepository.findPendingJobs(pageRequest);
+            case "PROCESSING" -> jobRepository.findProcessingJobs(pageRequest);
+            case "COMPLETED" -> jobRepository.findCompletedJobs(pageRequest);
+            case "FAILED" -> jobRepository.findFailedJobs(pageRequest);
+            default -> jobRepository.findAll(pageRequest);
+        };
 
         StringBuilder rows = new StringBuilder();
 
@@ -107,7 +104,7 @@ public class JobQDashboardController {
             rows.append(
                     """
                             <tr>
-                              <td colspan="6" class="px-6 py-12 text-center text-slate-400">
+                              <td colspan="8" class="px-6 py-12 text-center text-slate-400">
                                 <div class="flex flex-col items-center justify-center">
                                   <svg class="w-10 h-10 mb-3 opacity-50" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4"></path></svg>
                                   <span class="text-lg font-medium">No jobs found %s</span>
@@ -115,9 +112,10 @@ public class JobQDashboardController {
                               </td>
                             </tr>
                             """
-                            .formatted(!status.isBlank() ? "in " + status : ""));
+                            .formatted(!normalizedStatus.isBlank() ? "in " + normalizedStatus : ""));
         } else {
             for (Job job : jobsPage.getContent()) {
+                String statusLabel = job.getStatus();
                 rows.append(
                         """
                                 <tr class="hover:bg-slate-800/50 transition-colors border-b border-slate-800/50 group cursor-pointer"
@@ -133,6 +131,8 @@ public class JobQDashboardController {
                                         <span class="text-xs text-slate-500 ml-2">Pri: %d</span>
                                     </td>
                                     <td class="px-6 py-3 text-slate-400 text-sm">%s</td>
+                                    <td class="px-6 py-3 text-slate-400 text-sm">%s</td>
+                                    <td class="px-6 py-3 text-slate-400 text-sm">%s</td>
                                     <td class="px-6 py-3 font-mono text-xs text-slate-500">%s</td>
                                     <td class="px-6 py-3 text-right">
                                        <span class="text-indigo-400 text-xs font-semibold opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-end gap-1">
@@ -143,12 +143,14 @@ public class JobQDashboardController {
                                 """
                                 .formatted(
                                         job.getId().toString(),
-                                        getBadgeClass(job.getStatus()), job.getStatus(),
+                                        getBadgeClass(statusLabel), statusLabel,
                                         escapeHtml(job.getType()),
                                         job.getRetryCount() > 0
                                                 ? "bg-rose-500/10 text-rose-400 border border-rose-500/20"
                                                 : "bg-slate-800 text-slate-400",
                                         job.getRetryCount(), job.getMaxRetries(), job.getPriority(),
+                                        job.getGroupId() != null ? escapeHtml(job.getGroupId()) : "—",
+                                        job.getReplaceKey() != null ? escapeHtml(job.getReplaceKey()) : "—",
                                         job.getCreatedAt() != null ? job.getCreatedAt().format(FORMATTER) : "—",
                                         job.getId().toString().substring(0, 8) + "..."));
             }
@@ -176,14 +178,15 @@ public class JobQDashboardController {
                 .formatted(
                         rows.toString(),
                         page + 1, Math.max(1, jobsPage.getTotalPages()),
-                        page == 0 ? "disabled" : "", status, Math.max(0, page - 1),
-                        page >= jobsPage.getTotalPages() - 1 ? "disabled" : "", status, page + 1,
-                        status);
+                        page == 0 ? "disabled" : "", normalizedStatus, Math.max(0, page - 1),
+                        page >= jobsPage.getTotalPages() - 1 ? "disabled" : "", normalizedStatus, page + 1,
+                        normalizedStatus);
     }
 
     @GetMapping(value = "/job/{id}", produces = MediaType.TEXT_HTML_VALUE)
     public String getJobDetails(@PathVariable("id") UUID id) {
         return jobRepository.findById(id).map(job -> {
+            String statusLabel = job.getStatus();
             String errorHtml = job.getErrorMessage() != null
                     ? """
                             <hr class="border-slate-800 my-4">
@@ -247,6 +250,30 @@ public class JobQDashboardController {
                                                     <dd class="mt-1 text-xs font-mono text-slate-300">%s</dd>
                                                 </div>
                                             </div>
+                                            <div class="grid grid-cols-3 gap-6">
+                                                <div class="bg-slate-800/50 p-4 rounded-lg border border-slate-800">
+                                                    <dt class="text-xs font-semibold uppercase tracking-wider text-slate-500">Processing Started At</dt>
+                                                    <dd class="mt-1 text-xs font-mono text-slate-300">%s</dd>
+                                                </div>
+                                                <div class="bg-slate-800/50 p-4 rounded-lg border border-slate-800">
+                                                    <dt class="text-xs font-semibold uppercase tracking-wider text-slate-500">Finished At</dt>
+                                                    <dd class="mt-1 text-xs font-mono text-slate-300">%s</dd>
+                                                </div>
+                                                <div class="bg-slate-800/50 p-4 rounded-lg border border-slate-800">
+                                                    <dt class="text-xs font-semibold uppercase tracking-wider text-slate-500">Failed At</dt>
+                                                    <dd class="mt-1 text-xs font-mono text-slate-300">%s</dd>
+                                                </div>
+                                            </div>
+                                            <div class="grid grid-cols-2 gap-6">
+                                                <div class="bg-slate-800/50 p-4 rounded-lg border border-slate-800">
+                                                    <dt class="text-xs font-semibold uppercase tracking-wider text-slate-500">Group ID</dt>
+                                                    <dd class="mt-1 text-sm font-medium text-slate-200">%s</dd>
+                                                </div>
+                                                <div class="bg-slate-800/50 p-4 rounded-lg border border-slate-800">
+                                                    <dt class="text-xs font-semibold uppercase tracking-wider text-slate-500">Replace Key</dt>
+                                                    <dd class="mt-1 text-sm font-medium text-slate-200">%s</dd>
+                                                </div>
+                                            </div>
                                             %s
                                             <div>
                                                 <dt class="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-2">Payload (JSON)</dt>
@@ -254,6 +281,7 @@ public class JobQDashboardController {
                                                     <pre class="bg-[#0d1117] text-[#c9d1d9] p-4 rounded-lg text-xs font-mono overflow-auto max-h-96 shadow-inner border border-slate-800">%s</pre>
                                                 </dd>
                                             </div>
+                                            %s
                                         </dl>
                                     </div>
                                 </div>
@@ -262,7 +290,7 @@ public class JobQDashboardController {
                     </div>
                     """
                     .formatted(
-                            getBadgeClass(job.getStatus()), job.getStatus(),
+                            getBadgeClass(statusLabel), statusLabel,
                             job.getId().toString(),
                             escapeHtml(job.getType()),
                             job.getPriority(),
@@ -271,8 +299,43 @@ public class JobQDashboardController {
                             job.getLockedBy() != null ? job.getLockedBy() : "—",
                             job.getCreatedAt() != null ? job.getCreatedAt().format(EXACT_FORMATTER) : "—",
                             job.getRunAt() != null ? job.getRunAt().format(EXACT_FORMATTER) : "—",
+                            job.getProcessingStartedAt() != null ? job.getProcessingStartedAt().format(EXACT_FORMATTER) : "—",
+                            job.getFinishedAt() != null ? job.getFinishedAt().format(EXACT_FORMATTER) : "—",
+                            job.getFailedAt() != null ? job.getFailedAt().format(EXACT_FORMATTER) : "—",
+                            job.getGroupId() != null ? escapeHtml(job.getGroupId()) : "—",
+                            job.getReplaceKey() != null ? escapeHtml(job.getReplaceKey()) : "—",
                             errorHtml,
-                            formatPayload(job.getPayload()));
+                            formatPayload(job.getPayload()),
+                            restartButtonHtml(job));
+        }).orElse("<div class='p-4 text-red-500'>Job not found.</div>");
+    }
+
+    @PostMapping(value = "/job/{id}/restart", produces = MediaType.TEXT_HTML_VALUE)
+    public String restartJob(@PathVariable("id") UUID id) {
+        return jobRepository.findById(id).map(job -> {
+            if (job.getFailedAt() == null) {
+                return """
+                        <div class="p-4 text-center text-amber-300 font-semibold">
+                            Job %s is not in FAILED state and cannot be restarted.
+                        </div>
+                        """.formatted(id.toString().substring(0, 8));
+            }
+
+            job.setProcessingStartedAt(null);
+            job.setFinishedAt(null);
+            job.setFailedAt(null);
+            job.setRetryCount(0);
+            job.setErrorMessage(null);
+            job.setLockedAt(null);
+            job.setLockedBy(null);
+            job.setRunAt(java.time.OffsetDateTime.now());
+            job.setUpdatedAt(java.time.OffsetDateTime.now());
+            jobRepository.save(job);
+            return """
+                    <div class="p-4 text-center text-emerald-400 font-semibold">
+                        ✅ Job %s has been restarted. It will be picked up on the next poll cycle.
+                    </div>
+                    """.formatted(id.toString().substring(0, 8));
         }).orElse("<div class='p-4 text-red-500'>Job not found.</div>");
     }
 
@@ -301,5 +364,31 @@ public class JobQDashboardController {
         } catch (JsonProcessingException e) {
             return escapeHtml(payload.toString());
         }
+    }
+
+    private String restartButtonHtml(Job job) {
+        if ("FAILED".equals(job.getStatus())) {
+            return """
+                    <div class="mt-6 pt-6 border-t border-slate-800">
+                        <button class="w-full px-4 py-3 bg-indigo-600 hover:bg-indigo-500 text-white font-semibold rounded-lg transition-colors flex items-center justify-center gap-2"
+                                hx-post="/jobq/htmx/job/%s/restart" hx-target="#modal-container" hx-swap="innerHTML">
+                            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path></svg>
+                            Restart Job
+                        </button>
+                    </div>
+                    """
+                    .formatted(job.getId().toString());
+        }
+        return "";
+    }
+
+    private String normalizeStatus(String rawStatus) {
+        if (rawStatus == null) {
+            return "";
+        }
+        return switch (rawStatus) {
+            case "PENDING", "PROCESSING", "COMPLETED", "FAILED" -> rawStatus;
+            default -> "";
+        };
     }
 }

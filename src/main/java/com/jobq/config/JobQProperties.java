@@ -120,8 +120,10 @@ public class JobQProperties {
     }
 
     public static class Dashboard {
-        private boolean enabled = true;
+        private boolean enabled = false;
         private String path = "/jobq/dashboard";
+        private AuthMode authMode = AuthMode.BASIC;
+        private String requiredRole = "JOBQ_DASHBOARD";
         private String username = "";
         private String password = "";
 
@@ -141,6 +143,22 @@ public class JobQProperties {
             this.path = path;
         }
 
+        public AuthMode getAuthMode() {
+            return authMode;
+        }
+
+        public void setAuthMode(AuthMode authMode) {
+            this.authMode = authMode;
+        }
+
+        public String getRequiredRole() {
+            return requiredRole;
+        }
+
+        public void setRequiredRole(String requiredRole) {
+            this.requiredRole = requiredRole;
+        }
+
         public String getUsername() {
             return username;
         }
@@ -155,6 +173,11 @@ public class JobQProperties {
 
         public void setPassword(String password) {
             this.password = password;
+        }
+
+        public enum AuthMode {
+            BASIC,
+            SPRING_SECURITY
         }
     }
 }

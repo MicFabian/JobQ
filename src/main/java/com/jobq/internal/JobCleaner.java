@@ -10,6 +10,7 @@ import org.springframework.stereotype.Component;
 
 import java.time.Duration;
 import java.time.OffsetDateTime;
+import java.util.Locale;
 
 @Component
 @ConditionalOnProperty(prefix = "jobq.background-job-server", name = "enabled", havingValue = "true", matchIfMissing = true)
@@ -34,7 +35,7 @@ public class JobCleaner {
             if (successRetentionStr != null && !successRetentionStr.isEmpty()) {
                 Duration retention = parseDuration(successRetentionStr);
                 OffsetDateTime threshold = OffsetDateTime.now().minus(retention);
-                int deletedSuccess = jobRepository.deleteByStatusAndUpdatedAtBefore("COMPLETED", threshold);
+                int deletedSuccess = jobRepository.deleteByFinishedAtBefore(threshold);
                 if (deletedSuccess > 0) {
                     log.info("Cleaned up {} successfully completed jobs older than {}", deletedSuccess, retention);
                 }
@@ -48,7 +49,7 @@ public class JobCleaner {
             if (failedRetentionStr != null && !failedRetentionStr.isEmpty()) {
                 Duration retention = parseDuration(failedRetentionStr);
                 OffsetDateTime threshold = OffsetDateTime.now().minus(retention);
-                int deletedFailed = jobRepository.deleteByStatusAndUpdatedAtBefore("FAILED", threshold);
+                int deletedFailed = jobRepository.deleteByFailedAtBefore(threshold);
                 if (deletedFailed > 0) {
                     log.info("Permanently deleted {} failed jobs older than {}", deletedFailed, retention);
                 }
@@ -59,16 +60,22 @@ public class JobCleaner {
     }
 
     private Duration parseDuration(String durationStr) {
-        // Simple parser for inputs like "36h" or "72h" as requested by user properties
-        durationStr = durationStr.trim().toLowerCase();
-        if (durationStr.endsWith("h")) {
-            long hours = Long.parseLong(durationStr.substring(0, durationStr.length() - 1));
+        String trimmed = durationStr.trim();
+        try {
+            return Duration.parse(trimmed);
+        } catch (RuntimeException ignored) {
+            // Continue with shorthand parsing below.
+        }
+
+        // Supports shorthand inputs like "36h" or "7d".
+        String shorthand = trimmed.toLowerCase(Locale.ROOT);
+        if (shorthand.endsWith("h")) {
+            long hours = Long.parseLong(shorthand.substring(0, shorthand.length() - 1));
             return Duration.ofHours(hours);
-        } else if (durationStr.endsWith("d")) {
-            long days = Long.parseLong(durationStr.substring(0, durationStr.length() - 1));
+        } else if (shorthand.endsWith("d")) {
+            long days = Long.parseLong(shorthand.substring(0, shorthand.length() - 1));
             return Duration.ofDays(days);
         }
-        // Fallback or more complex formats could be handled via standard Duration.parse
-        return Duration.parse(durationStr);
+        throw new IllegalArgumentException("Unsupported duration value: " + durationStr);
     }
 }

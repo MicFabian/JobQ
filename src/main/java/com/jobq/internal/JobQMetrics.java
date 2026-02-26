@@ -22,22 +22,22 @@ public class JobQMetrics {
     public void registerMetrics() {
         log.info("Micrometer found on classpath. Registering JobQ gauges...");
 
-        Gauge.builder("jobq.jobs.count", jobRepository, repo -> countStatus(repo, "PENDING"))
+        Gauge.builder("jobq.jobs.count", jobRepository, repo -> safeCount(repo::countPendingJobs, "PENDING"))
                 .description("Number of JobQ jobs")
                 .tag("status", "PENDING")
                 .register(meterRegistry);
 
-        Gauge.builder("jobq.jobs.count", jobRepository, repo -> countStatus(repo, "PROCESSING"))
+        Gauge.builder("jobq.jobs.count", jobRepository, repo -> safeCount(repo::countProcessingJobs, "PROCESSING"))
                 .description("Number of JobQ jobs")
                 .tag("status", "PROCESSING")
                 .register(meterRegistry);
 
-        Gauge.builder("jobq.jobs.count", jobRepository, repo -> countStatus(repo, "COMPLETED"))
+        Gauge.builder("jobq.jobs.count", jobRepository, repo -> safeCount(repo::countCompletedJobs, "COMPLETED"))
                 .description("Number of JobQ jobs")
                 .tag("status", "COMPLETED")
                 .register(meterRegistry);
 
-        Gauge.builder("jobq.jobs.count", jobRepository, repo -> countStatus(repo, "FAILED"))
+        Gauge.builder("jobq.jobs.count", jobRepository, repo -> safeCount(repo::countFailedJobs, "FAILED"))
                 .description("Number of JobQ jobs")
                 .tag("status", "FAILED")
                 .register(meterRegistry);
@@ -47,11 +47,11 @@ public class JobQMetrics {
                 .register(meterRegistry);
     }
 
-    private double countStatus(JobRepository repo, String status) {
+    private double safeCount(java.util.function.LongSupplier counter, String stateLabel) {
         try {
-            return repo.countByStatus(status);
+            return counter.getAsLong();
         } catch (Exception e) {
-            log.trace("Failed to query job count for status {}: {}", status, e.getMessage());
+            log.trace("Failed to query job count for state {}: {}", stateLabel, e.getMessage());
             return 0;
         }
     }

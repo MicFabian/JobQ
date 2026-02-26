@@ -15,6 +15,7 @@ import static org.awaitility.Awaitility.await;
 import static org.junit.jupiter.api.Assertions.*;
 
 import java.time.OffsetDateTime;
+import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -30,7 +31,8 @@ public class JobAnnotationTest {
     static PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:17-alpine")
             .withDatabaseName("testdb")
             .withUsername("test")
-            .withPassword("test");
+            .withPassword("test")
+            .withTmpFs(Map.of("/var/lib/postgresql/data", "rw"));
 
     @DynamicPropertySource
     static void registerPgProperties(DynamicPropertyRegistry registry) {

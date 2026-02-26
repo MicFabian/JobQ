@@ -4,6 +4,7 @@ import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
+import jakarta.persistence.Transient;
 import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.type.SqlTypes;
 
@@ -24,9 +25,6 @@ public class Job {
     @Column(columnDefinition = "jsonb")
     private com.fasterxml.jackson.databind.JsonNode payload;
 
-    @Column(nullable = false)
-    private String status = "PENDING";
-
     @Column(name = "created_at", insertable = false, updatable = false)
     private OffsetDateTime createdAt;
 
@@ -38,6 +36,15 @@ public class Job {
 
     @Column(name = "locked_by")
     private String lockedBy;
+
+    @Column(name = "processing_started_at")
+    private OffsetDateTime processingStartedAt;
+
+    @Column(name = "finished_at")
+    private OffsetDateTime finishedAt;
+
+    @Column(name = "failed_at")
+    private OffsetDateTime failedAt;
 
     @Column(name = "error_message", columnDefinition = "text")
     private String errorMessage;
@@ -54,6 +61,15 @@ public class Job {
     @Column(name = "run_at")
     private OffsetDateTime runAt;
 
+    @Column(name = "group_id")
+    private String groupId;
+
+    @Column(name = "replace_key")
+    private String replaceKey;
+
+    @Column(name = "cron")
+    private String cron;
+
     public Job() {
         this.runAt = OffsetDateTime.now();
     }
@@ -62,10 +78,16 @@ public class Job {
         this.id = id;
         this.type = type;
         this.payload = payload;
-        this.status = "PENDING";
         this.maxRetries = maxRetries;
         this.priority = priority;
         this.runAt = OffsetDateTime.now();
+    }
+
+    public Job(UUID id, String type, com.fasterxml.jackson.databind.JsonNode payload, int maxRetries, int priority,
+            String groupId, String replaceKey) {
+        this(id, type, payload, maxRetries, priority);
+        this.groupId = groupId;
+        this.replaceKey = replaceKey;
     }
 
     public UUID getId() {
@@ -92,12 +114,45 @@ public class Job {
         this.payload = payload;
     }
 
+    @Transient
     public String getStatus() {
-        return status;
+        if (finishedAt != null) {
+            return "COMPLETED";
+        }
+        if (failedAt != null) {
+            return "FAILED";
+        }
+        if (processingStartedAt != null) {
+            return "PROCESSING";
+        }
+        return "PENDING";
     }
 
     public void setStatus(String status) {
-        this.status = status;
+        OffsetDateTime now = OffsetDateTime.now();
+        switch (status) {
+            case "PENDING" -> {
+                this.processingStartedAt = null;
+                this.finishedAt = null;
+                this.failedAt = null;
+            }
+            case "PROCESSING" -> {
+                if (this.processingStartedAt == null) {
+                    this.processingStartedAt = now;
+                }
+                this.finishedAt = null;
+                this.failedAt = null;
+            }
+            case "COMPLETED" -> {
+                this.finishedAt = now;
+                this.failedAt = null;
+            }
+            case "FAILED" -> {
+                this.failedAt = now;
+                this.finishedAt = null;
+            }
+            default -> throw new IllegalArgumentException("Unsupported status: " + status);
+        }
     }
 
     public OffsetDateTime getCreatedAt() {
@@ -130,6 +185,30 @@ public class Job {
 
     public void setLockedBy(String lockedBy) {
         this.lockedBy = lockedBy;
+    }
+
+    public OffsetDateTime getProcessingStartedAt() {
+        return processingStartedAt;
+    }
+
+    public void setProcessingStartedAt(OffsetDateTime processingStartedAt) {
+        this.processingStartedAt = processingStartedAt;
+    }
+
+    public OffsetDateTime getFinishedAt() {
+        return finishedAt;
+    }
+
+    public void setFinishedAt(OffsetDateTime finishedAt) {
+        this.finishedAt = finishedAt;
+    }
+
+    public OffsetDateTime getFailedAt() {
+        return failedAt;
+    }
+
+    public void setFailedAt(OffsetDateTime failedAt) {
+        this.failedAt = failedAt;
     }
 
     public String getErrorMessage() {
@@ -174,5 +253,29 @@ public class Job {
 
     public void incrementRetryCount() {
         this.retryCount++;
+    }
+
+    public String getGroupId() {
+        return groupId;
+    }
+
+    public void setGroupId(String groupId) {
+        this.groupId = groupId;
+    }
+
+    public String getReplaceKey() {
+        return replaceKey;
+    }
+
+    public void setReplaceKey(String replaceKey) {
+        this.replaceKey = replaceKey;
+    }
+
+    public String getCron() {
+        return cron;
+    }
+
+    public void setCron(String cron) {
+        this.cron = cron;
     }
 }

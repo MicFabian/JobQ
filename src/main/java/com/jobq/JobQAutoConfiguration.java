@@ -4,18 +4,19 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import com.jobq.config.JobQProperties;
 import org.hibernate.boot.model.naming.Identifier;
-import org.hibernate.engine.jdbc.env.spi.JdbcEnvironment;
+import org.hibernate.boot.model.naming.PhysicalNamingStrategySnakeCaseImpl;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.hibernate.autoconfigure.HibernatePropertiesCustomizer;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
-import org.hibernate.boot.model.naming.CamelCaseToUnderscoresNamingStrategy;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.ComponentScan;
 import org.springframework.scheduling.annotation.EnableScheduling;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import io.micrometer.core.instrument.MeterRegistry;
 import com.jobq.internal.JobQMetrics;
+
+import java.util.Locale;
 
 @AutoConfiguration
 @ComponentScan("com.jobq")
@@ -38,12 +39,13 @@ public class JobQAutoConfiguration {
             String prefix = properties.getDatabase().getTablePrefix();
             if (prefix != null && !prefix.trim().isEmpty()) {
                 hibernateProperties.put("hibernate.physical_naming_strategy",
-                        new CamelCaseToUnderscoresNamingStrategy() {
+                        new PhysicalNamingStrategySnakeCaseImpl() {
                             @Override
-                            public Identifier toPhysicalTableName(Identifier name, JdbcEnvironment jdbcEnvironment) {
+                            public Identifier toPhysicalTableName(Identifier name,
+                                    org.hibernate.engine.jdbc.env.spi.JdbcEnvironment jdbcEnvironment) {
                                 Identifier original = super.toPhysicalTableName(name, jdbcEnvironment);
                                 // Only intercept JobQ tables
-                                if (original.getText().toLowerCase().startsWith("jobq_")) {
+                                if (original.getText().toLowerCase(Locale.ROOT).startsWith("jobq_")) {
                                     return new Identifier(prefix + original.getText(), original.isQuoted());
                                 }
                                 return original;
