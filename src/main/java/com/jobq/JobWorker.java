@@ -63,11 +63,11 @@ public interface JobWorker<T> {
     }
 
     /**
-     * Optional alias for {@link #onSuccess(UUID, Object)}.
-     * Override this method if you prefer `after(...)` naming.
+     * Optional callback invoked after the job finishes, regardless of outcome.
+     * Throwing from this method does not alter the persisted job outcome.
      */
     default void after(java.util.UUID jobId, T payload) {
-        onSuccess(jobId, payload);
+        // no-op
     }
 
     /**

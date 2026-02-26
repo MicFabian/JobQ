@@ -94,7 +94,7 @@ public class WelcomeEmailJob {
 
 For annotation-only jobs, the job type comes from `@Job(value = "...")`.
 `JobWorker` is optional. If you use `JobWorker<T>`, `getJobType()` and `getPayloadClass()` are optional and inferred.
-For `JobWorker<T>`, you can override either `onSuccess(...)` or the `after(...)` alias.
+For `JobWorker<T>`, you can override `onSuccess(...)` and/or `after(...)`.
 
 Supported annotation-driven `process` signatures:
 
@@ -112,16 +112,26 @@ Supported annotation-driven `onError` signatures:
 
 If `onError(...)` throws, JobQ logs that callback failure and continues normal retry/failure handling using the original processing exception.
 
-Supported annotation-driven success hook signatures (`onSuccess` or `after`):
+Supported annotation-driven `onSuccess` signatures:
 
 - `onSuccess()`
 - `onSuccess(UUID jobId)`
 - `onSuccess(Payload payload)`
 - `onSuccess(UUID jobId, Payload payload)`
 
-or the same signatures using `after(...)` as the method name.
+`onSuccess(...)` is called only when the job finishes successfully.
 
 If a success callback throws, JobQ logs it and keeps the job in `COMPLETED` state.
+
+Supported annotation-driven `after` signatures:
+
+- `after()`
+- `after(UUID jobId)`
+- `after(Payload payload)`
+- `after(UUID jobId, Payload payload)`
+
+`after(...)` is called after job execution regardless of success or failure.
+If `after(...)` throws, JobQ logs it and keeps the persisted job outcome unchanged.
 
 ### 3. Enqueue inside a transaction
 

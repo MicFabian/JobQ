@@ -213,6 +213,8 @@ public class JobPoller {
 
             log.error("Failed to process job {} of type {}", job.getId(), job.getType(), e);
             handleFailure(job, e, registration);
+        } finally {
+            invokeAfterSafely(registration, job.getId(), payload);
         }
     }
 
@@ -228,8 +230,16 @@ public class JobPoller {
         try {
             registration.successHandler().onSuccess(jobId, payload);
         } catch (Exception onSuccessFailure) {
-            log.error("onSuccess/after callback failed for job {} of type {}", jobId, registration.type(),
+            log.error("onSuccess callback failed for job {} of type {}", jobId, registration.type(),
                     onSuccessFailure);
+        }
+    }
+
+    private void invokeAfterSafely(RegisteredJob registration, UUID jobId, Object payload) {
+        try {
+            registration.afterHandler().after(jobId, payload);
+        } catch (Exception afterFailure) {
+            log.error("after callback failed for job {} of type {}", jobId, registration.type(), afterFailure);
         }
     }
 
@@ -243,7 +253,9 @@ public class JobPoller {
         JobErrorHandler errorHandler = (jobId, payload, exception) -> invokeWorkerOnError(worker, jobId, payload,
                 exception);
         JobSuccessHandler successHandler = (jobId, payload) -> invokeWorkerOnSuccess(worker, jobId, payload);
+        JobAfterHandler afterHandler = (jobId, payload) -> invokeWorkerAfter(worker, jobId, payload);
         registerJob(registrations, jobType, payloadDeserializer, annotation, invoker, errorHandler, successHandler,
+                afterHandler,
                 "JobWorker bean " + ClassUtils.getUserClass(worker).getName());
     }
 
@@ -263,11 +275,14 @@ public class JobPoller {
         PayloadDeserializer payloadDeserializer = payloadDeserializerFor(payloadClass);
         Method onErrorMethod = resolveOnErrorMethod(bean, payloadClass);
         Method onSuccessMethod = resolveOnSuccessMethod(bean, payloadClass);
+        Method afterMethod = resolveAfterMethod(bean, payloadClass);
         JobInvoker invoker = createProcessInvoker(bean, processMethod);
         JobErrorHandler errorHandler = createOnErrorHandler(bean, onErrorMethod);
         JobSuccessHandler successHandler = createOnSuccessHandler(bean, onSuccessMethod);
+        JobAfterHandler afterHandler = createAfterHandler(bean, afterMethod);
 
         registerJob(registrations, jobType, payloadDeserializer, annotation, invoker, errorHandler, successHandler,
+                afterHandler,
                 "@Job bean " + ClassUtils.getUserClass(bean).getName());
     }
 
@@ -279,6 +294,7 @@ public class JobPoller {
             JobInvoker invoker,
             JobErrorHandler errorHandler,
             JobSuccessHandler successHandler,
+            JobAfterHandler afterHandler,
             String source) {
         String recurringCron = null;
         CronExpression recurringCronExpression = null;
@@ -293,6 +309,7 @@ public class JobPoller {
         }
         RegisteredJob existing = registrations.putIfAbsent(jobType,
                 new RegisteredJob(jobType, payloadDeserializer, annotation, invoker, errorHandler, successHandler,
+                        afterHandler,
                         recurringCron,
                         recurringCronExpression));
         if (existing != null) {
@@ -489,18 +506,16 @@ public class JobPoller {
     }
 
     private Method resolveOnSuccessMethod(Object bean, Class<?> payloadClass) {
+        return resolveCompletionCallbackMethod(bean, payloadClass, "onSuccess");
+    }
+
+    private Method resolveAfterMethod(Object bean, Class<?> payloadClass) {
+        return resolveCompletionCallbackMethod(bean, payloadClass, "after");
+    }
+
+    private Method resolveCompletionCallbackMethod(Object bean, Class<?> payloadClass, String callbackName) {
         Class<?> targetClass = ClassUtils.getUserClass(bean);
-        List<Method> onSuccessMethods = findLifecycleCallbackMethods(targetClass, "onSuccess");
-        List<Method> afterMethods = findLifecycleCallbackMethods(targetClass, "after");
-
-        if (!onSuccessMethods.isEmpty() && !afterMethods.isEmpty()) {
-            throw new IllegalStateException(
-                    "@Job bean " + targetClass.getName()
-                            + " must declare either onSuccess(...) or after(...), not both.");
-        }
-
-        String callbackName = !onSuccessMethods.isEmpty() ? "onSuccess" : "after";
-        List<Method> callbackMethods = !onSuccessMethods.isEmpty() ? onSuccessMethods : afterMethods;
+        List<Method> callbackMethods = findLifecycleCallbackMethods(targetClass, callbackName);
         if (callbackMethods.isEmpty()) {
             return null;
         }
@@ -644,6 +659,25 @@ public class JobPoller {
         return (jobId, payload) -> invokeReflectively(bean, onSuccessMethod, jobId, payload);
     }
 
+    private JobAfterHandler createAfterHandler(Object bean, Method afterMethod) {
+        if (afterMethod == null) {
+            return (jobId, payload) -> {
+            };
+        }
+
+        int parameterCount = afterMethod.getParameterCount();
+        if (parameterCount == 0) {
+            return (jobId, payload) -> invokeReflectively(bean, afterMethod);
+        }
+        if (parameterCount == 1) {
+            if (UUID.class.isAssignableFrom(afterMethod.getParameterTypes()[0])) {
+                return (jobId, payload) -> invokeReflectively(bean, afterMethod, jobId);
+            }
+            return (jobId, payload) -> invokeReflectively(bean, afterMethod, payload);
+        }
+        return (jobId, payload) -> invokeReflectively(bean, afterMethod, jobId, payload);
+    }
+
     private void invokeReflectively(Object bean, Method method, Object... args) throws Exception {
         try {
             method.invoke(bean, args);
@@ -672,6 +706,12 @@ public class JobPoller {
     }
 
     private void invokeWorkerOnSuccess(JobWorker<?> worker, UUID jobId, Object payload) throws Exception {
+        @SuppressWarnings("unchecked")
+        JobWorker<Object> castWorker = (JobWorker<Object>) worker;
+        castWorker.onSuccess(jobId, payload);
+    }
+
+    private void invokeWorkerAfter(JobWorker<?> worker, UUID jobId, Object payload) throws Exception {
         @SuppressWarnings("unchecked")
         JobWorker<Object> castWorker = (JobWorker<Object>) worker;
         castWorker.after(jobId, payload);
@@ -890,6 +930,7 @@ public class JobPoller {
             JobInvoker invoker,
             JobErrorHandler errorHandler,
             JobSuccessHandler successHandler,
+            JobAfterHandler afterHandler,
             String recurringCron,
             CronExpression recurringCronExpression) {
     }
@@ -902,6 +943,11 @@ public class JobPoller {
     @FunctionalInterface
     private interface JobSuccessHandler {
         void onSuccess(UUID jobId, Object payload) throws Exception;
+    }
+
+    @FunctionalInterface
+    private interface JobAfterHandler {
+        void after(UUID jobId, Object payload) throws Exception;
     }
 
     @PreDestroy

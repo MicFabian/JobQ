@@ -97,6 +97,12 @@ public class JobQIntegrationTest {
     static volatile CountDownLatch workerAfterLatch;
     static volatile UUID lastWorkerAfterJobId;
     static volatile String lastWorkerAfterMessage;
+    static volatile CountDownLatch workerAfterAlwaysLatch;
+    static volatile UUID lastWorkerAfterAlwaysJobId;
+    static volatile String lastWorkerAfterAlwaysMessage;
+    static volatile CountDownLatch annotationAfterAlwaysLatch;
+    static volatile UUID lastAnnotationAfterAlwaysJobId;
+    static volatile String lastAnnotationAfterAlwaysMessage;
 
     @Configuration
     static class TestConfig {
@@ -272,6 +278,30 @@ public class JobQIntegrationTest {
             };
         }
 
+        @Bean
+        JobWorker<TestPayload> workerAfterAlwaysJob() {
+            return new JobWorker<TestPayload>() {
+                @Override
+                public String getJobType() {
+                    return "WORKER_AFTER_ALWAYS_JOB";
+                }
+
+                @Override
+                public void process(UUID jobId, TestPayload payload) {
+                    throw new RuntimeException("worker-after-always-failure");
+                }
+
+                @Override
+                public void after(UUID jobId, TestPayload payload) {
+                    lastWorkerAfterAlwaysJobId = jobId;
+                    lastWorkerAfterAlwaysMessage = payload != null ? payload.getMessage() : null;
+                    if (workerAfterAlwaysLatch != null) {
+                        workerAfterAlwaysLatch.countDown();
+                    }
+                }
+            };
+        }
+
         @com.jobq.annotation.Job(value = "ANNOTATION_ONLY_JOB", payload = TestPayload.class)
         static class AnnotationOnlyJob {
             @SuppressWarnings("unused")
@@ -352,6 +382,28 @@ public class JobQIntegrationTest {
         @Bean
         AnnotationAfterJob annotationAfterJob() {
             return new AnnotationAfterJob();
+        }
+
+        @com.jobq.annotation.Job(value = "ANNOTATION_AFTER_ALWAYS_JOB", payload = TestPayload.class)
+        static class AnnotationAfterAlwaysJob {
+            @SuppressWarnings("unused")
+            public void process(UUID jobId, TestPayload payload) {
+                throw new RuntimeException("annotation-after-always-failure");
+            }
+
+            @SuppressWarnings("unused")
+            public void after(UUID jobId, TestPayload payload) {
+                lastAnnotationAfterAlwaysJobId = jobId;
+                lastAnnotationAfterAlwaysMessage = payload != null ? payload.getMessage() : null;
+                if (annotationAfterAlwaysLatch != null) {
+                    annotationAfterAlwaysLatch.countDown();
+                }
+            }
+        }
+
+        @Bean
+        AnnotationAfterAlwaysJob annotationAfterAlwaysJob() {
+            return new AnnotationAfterAlwaysJob();
         }
 
         @com.jobq.annotation.Job(value = "EXPECTED_EXCEPTION_JOB", expectedExceptions = { ExpectedBusinessException.class })
@@ -756,6 +808,24 @@ public class JobQIntegrationTest {
     }
 
     @Test
+    void shouldInvokeAfterForJobWorkerWhenProcessFails() throws InterruptedException {
+        workerAfterAlwaysLatch = new CountDownLatch(1);
+        lastWorkerAfterAlwaysJobId = null;
+        lastWorkerAfterAlwaysMessage = null;
+
+        UUID jobId = jobClient.enqueue("WORKER_AFTER_ALWAYS_JOB", new TestPayload("worker-after-always"), 0);
+        assertTrue(workerAfterAlwaysLatch.await(10, TimeUnit.SECONDS));
+
+        await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
+            Job job = jobRepository.findById(jobId).orElseThrow();
+            assertEquals(jobId, lastWorkerAfterAlwaysJobId);
+            assertEquals("worker-after-always", lastWorkerAfterAlwaysMessage);
+            assertEquals("FAILED", job.getStatus());
+            assertEquals(1, job.getRetryCount());
+        });
+    }
+
+    @Test
     void shouldInvokeOnErrorForAnnotationOnlyJobWhenProcessThrows() throws InterruptedException {
         annotationOnErrorLatch = new CountDownLatch(1);
         lastAnnotationOnErrorJobId = null;
@@ -808,6 +878,24 @@ public class JobQIntegrationTest {
             assertEquals("annotation-after", lastAnnotationAfterMessage);
             assertEquals("COMPLETED", job.getStatus());
             assertEquals(0, job.getRetryCount());
+        });
+    }
+
+    @Test
+    void shouldInvokeAfterForAnnotationOnlyJobWhenProcessFails() throws InterruptedException {
+        annotationAfterAlwaysLatch = new CountDownLatch(1);
+        lastAnnotationAfterAlwaysJobId = null;
+        lastAnnotationAfterAlwaysMessage = null;
+
+        UUID jobId = jobClient.enqueue("ANNOTATION_AFTER_ALWAYS_JOB", new TestPayload("annotation-after-always"), 0);
+        assertTrue(annotationAfterAlwaysLatch.await(10, TimeUnit.SECONDS));
+
+        await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
+            Job job = jobRepository.findById(jobId).orElseThrow();
+            assertEquals(jobId, lastAnnotationAfterAlwaysJobId);
+            assertEquals("annotation-after-always", lastAnnotationAfterAlwaysMessage);
+            assertEquals("FAILED", job.getStatus());
+            assertEquals(1, job.getRetryCount());
         });
     }
 
