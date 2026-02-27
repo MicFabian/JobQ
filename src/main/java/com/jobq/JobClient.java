@@ -9,7 +9,6 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import com.jobq.config.JobQProperties;
-import org.springframework.lang.Nullable;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -34,7 +33,7 @@ public class JobClient {
 
     @Autowired
     public JobClient(JobRepository jobRepository, ObjectMapper objectMapper, JobQProperties properties,
-            JdbcTemplate jdbcTemplate, @Nullable JobTypeMetadataRegistry jobTypeMetadataRegistry) {
+            JdbcTemplate jdbcTemplate, JobTypeMetadataRegistry jobTypeMetadataRegistry) {
         this.jobRepository = jobRepository;
         this.objectMapper = objectMapper;
         this.properties = properties;
@@ -119,7 +118,7 @@ public class JobClient {
     }
 
     private UUID enqueue(String type, Object payload, int maxRetries, String groupId, String replaceKey,
-            @Nullable OffsetDateTime explicitRunAt) {
+            OffsetDateTime explicitRunAt) {
         String normalizedType = normalizeRequiredType(type);
         validateMaxRetries(maxRetries);
         String normalizedGroupId = normalizeOptionalString(groupId);
@@ -187,7 +186,7 @@ public class JobClient {
         return runAt;
     }
 
-    private OffsetDateTime resolveRunAt(String jobType, @Nullable OffsetDateTime explicitRunAt, OffsetDateTime now) {
+    private OffsetDateTime resolveRunAt(String jobType, OffsetDateTime explicitRunAt, OffsetDateTime now) {
         if (explicitRunAt != null) {
             return explicitRunAt;
         }
