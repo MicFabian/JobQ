@@ -37,7 +37,6 @@ CREATE INDEX IF NOT EXISTS idx_jobq_jobs_group ON jobq_jobs(group_id) WHERE grou
 DROP INDEX IF EXISTS idx_jobq_jobs_replace_key;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_jobq_jobs_replace_key
     ON jobq_jobs(type, replace_key)
-    WHERE processing_started_at IS NULL
-      AND finished_at IS NULL
+    WHERE finished_at IS NULL
       AND failed_at IS NULL
       AND replace_key IS NOT NULL;

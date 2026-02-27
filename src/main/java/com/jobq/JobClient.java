@@ -130,8 +130,9 @@ public class JobClient {
         // Deduplication path is executed atomically at DB level to avoid exception-driven
         // races under high concurrency.
         if (normalizedReplaceKey != null) {
-            UUID dedupedId = upsertPendingDeduplicatedJob(normalizedType, jsonNode, maxRetries, normalizedGroupId,
-                    normalizedReplaceKey, resolvedRunAt, now);
+            boolean updateRunAtOnReplace = shouldUpdateRunAtOnReplace(normalizedType, explicitRunAt);
+            UUID dedupedId = upsertActiveDeduplicatedJob(normalizedType, jsonNode, maxRetries, normalizedGroupId,
+                    normalizedReplaceKey, resolvedRunAt, now, updateRunAtOnReplace);
             log.debug("Dedup-enqueued job {} of type {} with replaceKey '{}'", dedupedId, normalizedType,
                     normalizedReplaceKey);
             return dedupedId;
@@ -201,8 +202,19 @@ public class JobClient {
         return jobTypeMetadataRegistry.initialDelayMsFor(jobType);
     }
 
-    private UUID upsertPendingDeduplicatedJob(String type, JsonNode payload, int maxRetries, String groupId,
-            String replaceKey, OffsetDateTime runAt, OffsetDateTime now) {
+    private boolean shouldUpdateRunAtOnReplace(String jobType, OffsetDateTime explicitRunAt) {
+        if (explicitRunAt != null) {
+            return true;
+        }
+        if (jobTypeMetadataRegistry == null) {
+            return true;
+        }
+        return jobTypeMetadataRegistry
+                .deduplicationRunAtPolicyFor(jobType) == com.jobq.annotation.Job.DeduplicationRunAtPolicy.UPDATE_ON_REPLACE;
+    }
+
+    private UUID upsertActiveDeduplicatedJob(String type, JsonNode payload, int maxRetries, String groupId,
+            String replaceKey, OffsetDateTime runAt, OffsetDateTime now, boolean updateRunAtOnReplace) {
         UUID insertedId = UUID.randomUUID();
         String payloadJson = payload == null ? null : payload.toString();
 
@@ -217,6 +229,7 @@ public class JobClient {
                     ps.setInt(6, maxRetries);
                     ps.setString(7, groupId);
                     ps.setString(8, replaceKey);
+                    ps.setBoolean(9, updateRunAtOnReplace);
                 },
                 rs -> rs.next() ? rs.getObject("id", UUID.class) : null);
 
@@ -240,21 +253,46 @@ public class JobClient {
                 INSERT INTO %s (id, type, payload, run_at, updated_at, max_retries, priority, group_id, replace_key)
                 VALUES (?, ?, CAST(? AS jsonb), ?, ?, ?, 0, ?, ?)
                 ON CONFLICT (type, replace_key)
-                WHERE processing_started_at IS NULL
-                  AND finished_at IS NULL
+                WHERE finished_at IS NULL
                   AND failed_at IS NULL
                   AND replace_key IS NOT NULL
                 DO UPDATE SET
-                  payload = EXCLUDED.payload,
-                  run_at = EXCLUDED.run_at,
-                  updated_at = EXCLUDED.updated_at,
-                  max_retries = EXCLUDED.max_retries,
-                  group_id = EXCLUDED.group_id,
-                  processing_started_at = NULL,
-                  finished_at = NULL,
-                  failed_at = NULL,
-                  error_message = NULL,
-                  retry_count = 0
+                  payload = CASE
+                    WHEN %1$s.processing_started_at IS NULL THEN EXCLUDED.payload
+                    ELSE %1$s.payload
+                  END,
+                  run_at = CASE
+                    WHEN %1$s.processing_started_at IS NULL AND ? THEN EXCLUDED.run_at
+                    ELSE %1$s.run_at
+                  END,
+                  updated_at = CASE
+                    WHEN %1$s.processing_started_at IS NULL THEN EXCLUDED.updated_at
+                    ELSE %1$s.updated_at
+                  END,
+                  max_retries = CASE
+                    WHEN %1$s.processing_started_at IS NULL THEN EXCLUDED.max_retries
+                    ELSE %1$s.max_retries
+                  END,
+                  group_id = CASE
+                    WHEN %1$s.processing_started_at IS NULL THEN EXCLUDED.group_id
+                    ELSE %1$s.group_id
+                  END,
+                  error_message = CASE
+                    WHEN %1$s.processing_started_at IS NULL THEN NULL
+                    ELSE %1$s.error_message
+                  END,
+                  retry_count = CASE
+                    WHEN %1$s.processing_started_at IS NULL THEN 0
+                    ELSE %1$s.retry_count
+                  END,
+                  locked_at = CASE
+                    WHEN %1$s.processing_started_at IS NULL THEN NULL
+                    ELSE %1$s.locked_at
+                  END,
+                  locked_by = CASE
+                    WHEN %1$s.processing_started_at IS NULL THEN NULL
+                    ELSE %1$s.locked_by
+                  END
                 RETURNING id
                 """.formatted(tableName);
     }

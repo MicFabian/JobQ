@@ -31,7 +31,11 @@ public class JobTypeMetadataRegistry {
             String jobType = normalizeRequiredType(worker.getJobType(), "JobWorker " + ClassUtils.getUserClass(worker).getName());
             com.jobq.annotation.Job jobAnnotation = findJobAnnotation(worker);
             long initialDelayMs = jobAnnotation != null ? sanitizeInitialDelayMs(jobAnnotation.initialDelayMs()) : 0L;
-            register(metadata, jobType, initialDelayMs, "JobWorker bean " + ClassUtils.getUserClass(worker).getName());
+            com.jobq.annotation.Job.DeduplicationRunAtPolicy deduplicationRunAtPolicy = jobAnnotation != null
+                    ? jobAnnotation.deduplicationRunAtPolicy()
+                    : com.jobq.annotation.Job.DeduplicationRunAtPolicy.UPDATE_ON_REPLACE;
+            register(metadata, jobType, initialDelayMs, deduplicationRunAtPolicy,
+                    "JobWorker bean " + ClassUtils.getUserClass(worker).getName());
         }
 
         Map<String, Object> annotationBeans = beanFactory.getBeansWithAnnotation(com.jobq.annotation.Job.class);
@@ -49,7 +53,8 @@ public class JobTypeMetadataRegistry {
                     "@Job bean " + ClassUtils.getUserClass(bean).getName());
 
             long initialDelayMs = sanitizeInitialDelayMs(jobAnnotation.initialDelayMs());
-            register(metadata, jobType, initialDelayMs, "@Job bean " + ClassUtils.getUserClass(bean).getName());
+            register(metadata, jobType, initialDelayMs, jobAnnotation.deduplicationRunAtPolicy(),
+                    "@Job bean " + ClassUtils.getUserClass(bean).getName());
         }
 
         metadataByType = Map.copyOf(metadata);
@@ -60,11 +65,26 @@ public class JobTypeMetadataRegistry {
         return metadata == null ? 0L : metadata.initialDelayMs();
     }
 
-    private void register(Map<String, JobTypeMetadata> metadata, String jobType, long initialDelayMs, String source) {
-        JobTypeMetadata existing = metadata.putIfAbsent(jobType, new JobTypeMetadata(initialDelayMs));
-        if (existing != null && existing.initialDelayMs() != initialDelayMs) {
+    public com.jobq.annotation.Job.DeduplicationRunAtPolicy deduplicationRunAtPolicyFor(String jobType) {
+        JobTypeMetadata metadata = metadataByType.get(jobType);
+        return metadata == null
+                ? com.jobq.annotation.Job.DeduplicationRunAtPolicy.UPDATE_ON_REPLACE
+                : metadata.deduplicationRunAtPolicy();
+    }
+
+    private void register(
+            Map<String, JobTypeMetadata> metadata,
+            String jobType,
+            long initialDelayMs,
+            com.jobq.annotation.Job.DeduplicationRunAtPolicy deduplicationRunAtPolicy,
+            String source) {
+        JobTypeMetadata existing = metadata.putIfAbsent(jobType,
+                new JobTypeMetadata(initialDelayMs, deduplicationRunAtPolicy));
+        if (existing != null && (existing.initialDelayMs() != initialDelayMs
+                || existing.deduplicationRunAtPolicy() != deduplicationRunAtPolicy)) {
             throw new IllegalStateException(
-                    "Job type '" + jobType + "' has conflicting initialDelayMs between definitions while scanning "
+                    "Job type '" + jobType
+                            + "' has conflicting metadata between definitions while scanning "
                             + source + ".");
         }
     }
@@ -92,6 +112,8 @@ public class JobTypeMetadataRegistry {
         return initialDelayMs;
     }
 
-    private record JobTypeMetadata(long initialDelayMs) {
+    private record JobTypeMetadata(
+            long initialDelayMs,
+            com.jobq.annotation.Job.DeduplicationRunAtPolicy deduplicationRunAtPolicy) {
     }
 }

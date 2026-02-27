@@ -259,7 +259,25 @@ jobClient.enqueue("generate-report", payload, "reports");
 jobClient.enqueue("generate-report", payload, "reports", "customer-123");
 ```
 
-If a `PENDING` job exists with the same `(type, replaceKey)`, JobQ updates that existing row instead of creating another.
+If an active job exists with the same `(type, replaceKey)` (active = not finished and not failed), JobQ deduplicates against that row instead of creating another.
+
+- If the active row is `PENDING`, payload/group/retry settings are replaced.
+- If the active row is already `PROCESSING`, JobQ returns the existing job id and does not reset its processing state.
+
+You can configure how dedup replacement handles the scheduled `runAt`:
+
+```java
+@Job(
+    value = "generate-report",
+    initialDelayMs = 300_000,
+    deduplicationRunAtPolicy = Job.DeduplicationRunAtPolicy.KEEP_EXISTING
+)
+```
+
+Policies:
+
+- `UPDATE_ON_REPLACE` (default): replacement recomputes `runAt` (including initial delay / explicit `enqueueAt` run time)
+- `KEEP_EXISTING`: replacement keeps the existing row's `runAt`
 
 ## Dashboard
 
@@ -335,7 +353,7 @@ Important indexes:
 
 - polling index for efficient lock/poll
 - group index
-- unique partial index on `(type, replace_key)` for `PENDING` rows
+- unique partial index on `(type, replace_key)` for active rows
 
 ## Design Notes
 

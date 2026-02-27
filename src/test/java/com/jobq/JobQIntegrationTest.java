@@ -599,6 +599,35 @@ public class JobQIntegrationTest {
             return new InitialDelayJobWorker();
         }
 
+        @com.jobq.annotation.Job(
+                value = "DEDUP_KEEP_DELAY_JOB",
+                initialDelayMs = 4000,
+                deduplicationRunAtPolicy = com.jobq.annotation.Job.DeduplicationRunAtPolicy.KEEP_EXISTING)
+        static class DedupKeepDelayJobWorker implements JobWorker<TestPayload> {
+            @Override
+            public void process(UUID jobId, TestPayload payload) {
+                // no-op
+            }
+        }
+
+        @Bean
+        JobWorker<TestPayload> dedupKeepDelayJobWorker() {
+            return new DedupKeepDelayJobWorker();
+        }
+
+        @com.jobq.annotation.Job(value = "DEDUP_UPDATE_DELAY_JOB", initialDelayMs = 4000)
+        static class DedupUpdateDelayJobWorker implements JobWorker<TestPayload> {
+            @Override
+            public void process(UUID jobId, TestPayload payload) {
+                // no-op
+            }
+        }
+
+        @Bean
+        JobWorker<TestPayload> dedupUpdateDelayJobWorker() {
+            return new DedupUpdateDelayJobWorker();
+        }
+
         @com.jobq.annotation.Job(value = "RECURRING_JOB", cron = "*/2 * * * * *")
         static class RecurringWorker implements JobWorker<Void> {
             @Override
@@ -1310,6 +1339,71 @@ public class JobQIntegrationTest {
                         "AND processing_started_at IS NULL AND finished_at IS NULL AND failed_at IS NULL",
                 Integer.class, type, replaceKey);
         assertEquals(1, pendingRows);
+    }
+
+    @Test
+    void shouldDeduplicateAgainstProcessingJobsWithSameReplaceKey() throws InterruptedException {
+        String replaceKey = "processing-key-" + UUID.randomUUID();
+        slowJobStartedLatch = new CountDownLatch(1);
+        slowJobFinishLatch = new CountDownLatch(1);
+        jobLatch = new CountDownLatch(1);
+
+        UUID firstId = jobClient.enqueue("SLOW_JOB", new TestPayload("first"), "slow-group", replaceKey);
+        assertTrue(slowJobStartedLatch.await(10, TimeUnit.SECONDS));
+
+        Job processingBefore = jobRepository.findById(firstId).orElseThrow();
+        assertEquals("PROCESSING", processingBefore.getStatus());
+        assertNotNull(processingBefore.getProcessingStartedAt());
+        OffsetDateTime processingStartedAt = processingBefore.getProcessingStartedAt();
+
+        UUID secondId = jobClient.enqueue("SLOW_JOB", new TestPayload("second"), "slow-group", replaceKey);
+        assertEquals(firstId, secondId);
+
+        Job stillProcessing = jobRepository.findById(firstId).orElseThrow();
+        assertEquals("PROCESSING", stillProcessing.getStatus());
+        assertEquals(processingStartedAt, stillProcessing.getProcessingStartedAt());
+
+        Integer activeRows = jdbcTemplate.queryForObject(
+                "SELECT count(*) FROM jobq_jobs WHERE type = ? AND replace_key = ? AND finished_at IS NULL AND failed_at IS NULL",
+                Integer.class,
+                "SLOW_JOB",
+                replaceKey);
+        assertEquals(1, activeRows);
+
+        slowJobFinishLatch.countDown();
+        assertTrue(jobLatch.await(10, TimeUnit.SECONDS));
+    }
+
+    @Test
+    void shouldKeepExistingRunAtWhenDedupPolicyIsKeepExisting() throws InterruptedException {
+        String replaceKey = "keep-delay-key-" + UUID.randomUUID();
+        UUID firstId = jobClient.enqueue("DEDUP_KEEP_DELAY_JOB", new TestPayload("first"), "dedup-delay", replaceKey);
+        Job first = jobRepository.findById(firstId).orElseThrow();
+        OffsetDateTime firstRunAt = first.getRunAt();
+
+        Thread.sleep(150);
+        UUID secondId = jobClient.enqueue("DEDUP_KEEP_DELAY_JOB", new TestPayload("second"), "dedup-delay", replaceKey);
+        assertEquals(firstId, secondId);
+
+        Job replaced = jobRepository.findById(firstId).orElseThrow();
+        assertEquals(firstRunAt, replaced.getRunAt());
+        assertTrue(replaced.getPayload().toString().contains("second"));
+    }
+
+    @Test
+    void shouldUpdateRunAtWhenDedupPolicyIsUpdateOnReplace() throws InterruptedException {
+        String replaceKey = "update-delay-key-" + UUID.randomUUID();
+        UUID firstId = jobClient.enqueue("DEDUP_UPDATE_DELAY_JOB", new TestPayload("first"), "dedup-delay", replaceKey);
+        Job first = jobRepository.findById(firstId).orElseThrow();
+        OffsetDateTime firstRunAt = first.getRunAt();
+
+        Thread.sleep(150);
+        UUID secondId = jobClient.enqueue("DEDUP_UPDATE_DELAY_JOB", new TestPayload("second"), "dedup-delay", replaceKey);
+        assertEquals(firstId, secondId);
+
+        Job replaced = jobRepository.findById(firstId).orElseThrow();
+        assertTrue(replaced.getRunAt().isAfter(firstRunAt));
+        assertTrue(replaced.getPayload().toString().contains("second"));
     }
 
     // ── New Feature Tests: GroupId ──
