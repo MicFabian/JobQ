@@ -79,7 +79,7 @@ class JobQHtmxControllerTest {
                 .andExpect(content().string(containsString("Total Jobs")))
                 .andExpect(content().string(containsString("Pending")));
 
-        verify(jobRepository, never()).findAll();
+        verify(jobRepository, never()).findAllJobs(any(Pageable.class));
     }
 
     @Test
@@ -92,7 +92,7 @@ class JobQHtmxControllerTest {
         job.setMaxRetries(3);
 
         Page<Job> jobPage = new PageImpl<>(List.of(job));
-        when(jobRepository.findAll(any(Pageable.class))).thenReturn(jobPage);
+        when(jobRepository.findAllJobs(any(Pageable.class))).thenReturn(jobPage);
 
         mockMvc.perform(get("/jobq/htmx/jobs"))
                 .andExpect(status().isOk())
@@ -102,13 +102,13 @@ class JobQHtmxControllerTest {
 
     @Test
     void shouldClampInvalidPageAndSizeValues() throws Exception {
-        when(jobRepository.findAll(any(Pageable.class))).thenReturn(Page.empty());
+        when(jobRepository.findAllJobs(any(Pageable.class))).thenReturn(Page.empty());
 
         mockMvc.perform(get("/jobq/htmx/jobs").param("page", "-7").param("size", "100000"))
                 .andExpect(status().isOk());
 
         ArgumentCaptor<Pageable> pageableCaptor = ArgumentCaptor.forClass(Pageable.class);
-        verify(jobRepository).findAll(pageableCaptor.capture());
+        verify(jobRepository).findAllJobs(pageableCaptor.capture());
         Pageable pageable = pageableCaptor.getValue();
         assertEquals(0, pageable.getPageNumber());
         assertEquals(200, pageable.getPageSize());
@@ -122,7 +122,7 @@ class JobQHtmxControllerTest {
         job.setType("com.example.TestJob");
 
         Page<Job> jobPage = new PageImpl<>(List.of(job));
-        when(jobRepository.findAll(any(Pageable.class))).thenReturn(jobPage);
+        when(jobRepository.findAllJobs(any(Pageable.class))).thenReturn(jobPage);
 
         mockMvc.perform(get("/jobq/htmx/jobs").param("status", "FAILED\" onclick=\"alert(1)"))
                 .andExpect(status().isOk())

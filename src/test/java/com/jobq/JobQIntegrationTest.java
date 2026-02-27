@@ -718,6 +718,27 @@ public class JobQIntegrationTest {
     }
 
     @Test
+    void shouldCreateDashboardAndCleanupIndexes() {
+        List<String> expectedIndexes = List.of(
+                "idx_jobq_jobs_created_at_desc",
+                "idx_jobq_jobs_pending_created_at",
+                "idx_jobq_jobs_processing_created_at",
+                "idx_jobq_jobs_completed_created_at",
+                "idx_jobq_jobs_failed_created_at",
+                "idx_jobq_jobs_finished_at_cleanup",
+                "idx_jobq_jobs_failed_at_cleanup",
+                "idx_jobq_jobs_active_type_cron");
+
+        for (String indexName : expectedIndexes) {
+            Integer indexCount = jdbcTemplate.queryForObject(
+                    "SELECT count(*) FROM pg_indexes WHERE tablename = 'jobq_jobs' AND indexname = ?",
+                    Integer.class,
+                    indexName);
+            assertEquals(1, indexCount, "Missing expected index: " + indexName);
+        }
+    }
+
+    @Test
     void shouldRollBackEnqueuedJobWhenOuterTransactionFails() {
         AtomicReference<UUID> jobIdRef = new AtomicReference<>();
 

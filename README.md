@@ -337,6 +337,30 @@ When Micrometer is on the classpath, JobQ registers:
 - `jobq.jobs.total`
 - `jobq.jobs.count{status="PENDING|PROCESSING|COMPLETED|FAILED"}`
 
+## Load Testing
+
+JobQ includes dedicated load/stress tests against PostgreSQL Testcontainers.
+
+Run only load tests:
+
+```bash
+./gradlew loadTest
+```
+
+Run performance benchmark tests:
+
+```bash
+./gradlew perfTest
+```
+
+Scenarios covered:
+
+- high-volume concurrent enqueue + processing (data-loss and failure checks)
+- high-contention dedup with `replaceKey`
+- mixed retry/exponential-error handling + expected-exception completion paths
+- scheduled `runAt` execution at scale
+- dedicated enqueue and end-to-end throughput benchmarks with timing output
+
 ## Schema
 
 JobQ can auto-initialize schema from `jobq-schema.sql`.
@@ -354,6 +378,8 @@ Important indexes:
 - polling index for efficient lock/poll
 - group index
 - unique partial index on `(type, replace_key)` for active rows
+- status/listing indexes on `created_at` for dashboard pagination
+- cleanup indexes on `finished_at` and `failed_at` for retention deletes
 
 ## Design Notes
 

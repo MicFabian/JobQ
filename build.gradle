@@ -70,3 +70,25 @@ tasks.withType(Test) {
     // Keep Mockito/ByteBuddy stable on newer JDKs while suppressing JVM attach/CDS warnings.
     jvmArgs "-Dnet.bytebuddy.experimental=true", "-XX:+EnableDynamicAgentLoading", "-Xshare:off"
 }
+
+tasks.register('loadTest', Test) {
+    useJUnitPlatform {
+        includeTags 'load'
+    }
+    description = 'Runs JobQ load and stress tests'
+    group = 'verification'
+    jvmArgs "-Dnet.bytebuddy.experimental=true", "-XX:+EnableDynamicAgentLoading", "-Xshare:off"
+}
+
+tasks.register('perfTest', Test) {
+    useJUnitPlatform {
+        includeTags 'perf'
+    }
+    description = 'Runs JobQ performance benchmark tests'
+    group = 'verification'
+    jvmArgs "-Dnet.bytebuddy.experimental=true", "-XX:+EnableDynamicAgentLoading", "-Xshare:off"
+    testLogging {
+        events "passed", "failed", "skipped"
+        showStandardStreams = true
+    }
+}

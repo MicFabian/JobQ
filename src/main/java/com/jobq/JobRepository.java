@@ -2,8 +2,8 @@ package com.jobq;
 
 import jakarta.persistence.LockModeType;
 import jakarta.persistence.QueryHint;
-import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Slice;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Modifying;
@@ -14,7 +14,6 @@ import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
-import java.util.Optional;
 import java.util.UUID;
 import java.time.OffsetDateTime;
 
@@ -53,7 +52,8 @@ public interface JobRepository extends JpaRepository<Job, UUID> {
               AND j.finishedAt IS NULL
               AND j.failedAt IS NULL
             """)
-    Page<Job> findPendingJobs(Pageable pageable);
+    @QueryHints(@QueryHint(name = "org.hibernate.readOnly", value = "true"))
+    Slice<Job> findPendingJobs(Pageable pageable);
 
     @Query("""
             SELECT j FROM Job j
@@ -61,13 +61,20 @@ public interface JobRepository extends JpaRepository<Job, UUID> {
               AND j.finishedAt IS NULL
               AND j.failedAt IS NULL
             """)
-    Page<Job> findProcessingJobs(Pageable pageable);
+    @QueryHints(@QueryHint(name = "org.hibernate.readOnly", value = "true"))
+    Slice<Job> findProcessingJobs(Pageable pageable);
 
     @Query("SELECT j FROM Job j WHERE j.finishedAt IS NOT NULL")
-    Page<Job> findCompletedJobs(Pageable pageable);
+    @QueryHints(@QueryHint(name = "org.hibernate.readOnly", value = "true"))
+    Slice<Job> findCompletedJobs(Pageable pageable);
 
     @Query("SELECT j FROM Job j WHERE j.failedAt IS NOT NULL")
-    Page<Job> findFailedJobs(Pageable pageable);
+    @QueryHints(@QueryHint(name = "org.hibernate.readOnly", value = "true"))
+    Slice<Job> findFailedJobs(Pageable pageable);
+
+    @Query("SELECT j FROM Job j")
+    @QueryHints(@QueryHint(name = "org.hibernate.readOnly", value = "true"))
+    Slice<Job> findAllJobs(Pageable pageable);
 
     @Query("""
             SELECT COUNT(j) FROM Job j
@@ -108,16 +115,6 @@ public interface JobRepository extends JpaRepository<Job, UUID> {
             FROM Job j
             """)
     LifecycleCounts countLifecycleCounts();
-
-    @Query("""
-            SELECT j FROM Job j
-            WHERE j.type = :type
-              AND j.replaceKey = :replaceKey
-              AND j.processingStartedAt IS NULL
-              AND j.finishedAt IS NULL
-              AND j.failedAt IS NULL
-            """)
-    Optional<Job> findPendingByTypeAndReplaceKey(@Param("type") String type, @Param("replaceKey") String replaceKey);
 
     @Modifying
     @Transactional

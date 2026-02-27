@@ -71,8 +71,8 @@ public class JobClient {
 
     /**
      * Enqueue a job with groupId and replaceKey.
-     * If a PENDING job with the same type + replaceKey already exists,
-     * its payload is updated in-place and the existing job ID is returned.
+     * If an active job (not finished/failed) with the same type + replaceKey already
+     * exists, JobQ deduplicates and returns that existing job ID.
      */
     public UUID enqueue(String type, Object payload, String groupId, String replaceKey) {
         return enqueue(type, payload, properties.getJobs().getDefaultNumberOfRetries(), groupId, replaceKey, null);
@@ -230,6 +230,8 @@ public class JobClient {
                     ps.setString(7, groupId);
                     ps.setString(8, replaceKey);
                     ps.setBoolean(9, updateRunAtOnReplace);
+                    ps.setString(10, type);
+                    ps.setString(11, replaceKey);
                 },
                 rs -> rs.next() ? rs.getObject("id", UUID.class) : null);
 
@@ -250,50 +252,39 @@ public class JobClient {
 
     private String buildDedupUpsertSql(String tableName) {
         return """
-                INSERT INTO %s (id, type, payload, run_at, updated_at, max_retries, priority, group_id, replace_key)
-                VALUES (?, ?, CAST(? AS jsonb), ?, ?, ?, 0, ?, ?)
-                ON CONFLICT (type, replace_key)
-                WHERE finished_at IS NULL
-                  AND failed_at IS NULL
-                  AND replace_key IS NOT NULL
-                DO UPDATE SET
-                  payload = CASE
-                    WHEN %1$s.processing_started_at IS NULL THEN EXCLUDED.payload
-                    ELSE %1$s.payload
-                  END,
-                  run_at = CASE
-                    WHEN %1$s.processing_started_at IS NULL AND ? THEN EXCLUDED.run_at
-                    ELSE %1$s.run_at
-                  END,
-                  updated_at = CASE
-                    WHEN %1$s.processing_started_at IS NULL THEN EXCLUDED.updated_at
-                    ELSE %1$s.updated_at
-                  END,
-                  max_retries = CASE
-                    WHEN %1$s.processing_started_at IS NULL THEN EXCLUDED.max_retries
-                    ELSE %1$s.max_retries
-                  END,
-                  group_id = CASE
-                    WHEN %1$s.processing_started_at IS NULL THEN EXCLUDED.group_id
-                    ELSE %1$s.group_id
-                  END,
-                  error_message = CASE
-                    WHEN %1$s.processing_started_at IS NULL THEN NULL
-                    ELSE %1$s.error_message
-                  END,
-                  retry_count = CASE
-                    WHEN %1$s.processing_started_at IS NULL THEN 0
-                    ELSE %1$s.retry_count
-                  END,
-                  locked_at = CASE
-                    WHEN %1$s.processing_started_at IS NULL THEN NULL
-                    ELSE %1$s.locked_at
-                  END,
-                  locked_by = CASE
-                    WHEN %1$s.processing_started_at IS NULL THEN NULL
-                    ELSE %1$s.locked_by
-                  END
-                RETURNING id
+                WITH dedup AS (
+                    INSERT INTO %1$s (id, type, payload, run_at, updated_at, max_retries, priority, group_id, replace_key)
+                    VALUES (?, ?, CAST(? AS jsonb), ?, ?, ?, 0, ?, ?)
+                    ON CONFLICT (type, replace_key)
+                    WHERE finished_at IS NULL
+                      AND failed_at IS NULL
+                      AND replace_key IS NOT NULL
+                    DO UPDATE SET
+                      payload = EXCLUDED.payload,
+                      run_at = CASE WHEN ? THEN EXCLUDED.run_at ELSE %1$s.run_at END,
+                      updated_at = EXCLUDED.updated_at,
+                      max_retries = EXCLUDED.max_retries,
+                      group_id = EXCLUDED.group_id,
+                      processing_started_at = NULL,
+                      finished_at = NULL,
+                      failed_at = NULL,
+                      error_message = NULL,
+                      retry_count = 0,
+                      locked_at = NULL,
+                      locked_by = NULL
+                    WHERE %1$s.processing_started_at IS NULL
+                    RETURNING id
+                )
+                SELECT id FROM dedup
+                UNION ALL
+                SELECT active.id
+                FROM %1$s active
+                WHERE active.type = ?
+                  AND active.replace_key = ?
+                  AND active.finished_at IS NULL
+                  AND active.failed_at IS NULL
+                  AND NOT EXISTS (SELECT 1 FROM dedup)
+                LIMIT 1
                 """.formatted(tableName);
     }
 }

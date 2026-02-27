@@ -51,6 +51,7 @@ public class JobPoller {
     private final TransactionTemplate transactionTemplate;
     private final com.jobq.config.JobQProperties properties;
     private final int workerCount;
+    private final int processingQueueCapacity;
     private final ThreadPoolExecutor processingExecutor;
     private final ThreadPoolExecutor pollingExecutor;
 
@@ -73,13 +74,13 @@ public class JobPoller {
         this.properties = properties;
         this.workerCount = Math.max(1, properties.getBackgroundJobServer().getWorkerCount());
 
-        int processingQueueCapacity = Math.max(32, workerCount * 8);
+        this.processingQueueCapacity = Math.max(32, workerCount * 8);
         this.processingExecutor = new ThreadPoolExecutor(
                 workerCount,
                 workerCount,
                 0L,
                 TimeUnit.MILLISECONDS,
-                new LinkedBlockingQueue<>(processingQueueCapacity),
+                new LinkedBlockingQueue<>(this.processingQueueCapacity),
                 new ThreadPoolExecutor.CallerRunsPolicy());
 
         int pollThreads = Math.min(4, Math.max(1, workerCount / 2));
@@ -152,43 +153,52 @@ public class JobPoller {
             return;
         }
 
-        int availableSlots = availableProcessingSlots();
-        if (availableSlots <= 0) {
-            return;
-        }
+        int remainingSlots = availableProcessingSlots();
+        while (remainingSlots > 0) {
+            // Acquire a bounded batch based on currently available processing capacity.
+            int batchSize = Math.min(workerCount, remainingSlots);
+            List<Job> jobs = transactionTemplate.execute(status -> {
+                List<Job> nextJobs = jobRepository.findNextJobsForUpdate(jobType, PageRequest.of(0, batchSize));
+                if (nextJobs.isEmpty()) {
+                    return List.<Job>of();
+                }
+                OffsetDateTime lockTime = OffsetDateTime.now();
+                for (Job j : nextJobs) {
+                    j.setProcessingStartedAt(lockTime);
+                    j.setFinishedAt(null);
+                    j.setFailedAt(null);
+                    j.setLockedAt(lockTime);
+                    j.setLockedBy(nodeId);
+                    j.setUpdatedAt(lockTime);
+                }
+                jobRepository.saveAll(nextJobs);
+                return nextJobs;
+            });
 
-        // Acquire a bounded batch based on currently available processing capacity.
-        List<Job> jobs = transactionTemplate.execute(status -> {
-            int batchSize = Math.min(workerCount, availableSlots);
-            List<Job> nextJobs = jobRepository.findNextJobsForUpdate(jobType, PageRequest.of(0, batchSize));
-            if (nextJobs.isEmpty()) {
-                return List.<Job>of();
+            if (jobs == null || jobs.isEmpty()) {
+                return;
             }
-            OffsetDateTime lockTime = OffsetDateTime.now();
-            for (Job j : nextJobs) {
-                j.setProcessingStartedAt(lockTime);
-                j.setFinishedAt(null);
-                j.setFailedAt(null);
-                j.setLockedAt(lockTime);
-                j.setLockedBy(nodeId);
-                j.setUpdatedAt(lockTime);
+
+            for (Job job : jobs) {
+                try {
+                    processingExecutor.execute(() -> processJob(job, registration));
+                } catch (RejectedExecutionException saturatedProcessingQueue) {
+                    log.debug("Skipping job {} dispatch for type {} because processing queue is saturated",
+                            job.getId(), jobType);
+                    return;
+                }
             }
-            jobRepository.saveAll(nextJobs);
-            return nextJobs;
-        });
 
-        if (jobs == null || jobs.isEmpty()) {
-            return;
-        }
-
-        for (Job job : jobs) {
-            processingExecutor.execute(() -> processJob(job, registration));
+            remainingSlots = availableProcessingSlots();
+            if (jobs.size() < batchSize) {
+                return;
+            }
         }
     }
 
     private int availableProcessingSlots() {
         int inFlight = processingExecutor.getActiveCount() + processingExecutor.getQueue().size();
-        return workerCount - inFlight;
+        return Math.max(0, processingQueueCapacity - inFlight);
     }
 
     private void processJob(Job job, RegisteredJob registration) {

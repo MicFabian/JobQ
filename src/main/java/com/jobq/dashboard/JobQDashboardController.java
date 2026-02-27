@@ -6,8 +6,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.jobq.Job;
 import com.jobq.JobRepository;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
-import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Slice;
 import org.springframework.data.domain.Sort;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -92,12 +92,12 @@ public class JobQDashboardController {
         int normalizedPage = Math.max(0, page);
         int normalizedSize = Math.max(1, Math.min(200, size));
         PageRequest pageRequest = PageRequest.of(normalizedPage, normalizedSize, Sort.by(Sort.Direction.DESC, "createdAt"));
-        Page<Job> jobsPage = switch (normalizedStatus) {
+        Slice<Job> jobsPage = switch (normalizedStatus) {
             case "PENDING" -> jobRepository.findPendingJobs(pageRequest);
             case "PROCESSING" -> jobRepository.findProcessingJobs(pageRequest);
             case "COMPLETED" -> jobRepository.findCompletedJobs(pageRequest);
             case "FAILED" -> jobRepository.findFailedJobs(pageRequest);
-            default -> jobRepository.findAll(pageRequest);
+            default -> jobRepository.findAllJobs(pageRequest);
         };
 
         StringBuilder rows = new StringBuilder();
@@ -163,7 +163,7 @@ public class JobQDashboardController {
         return """
                 %s
                 <div id="pagination-controls" hx-swap-oob="true" class="flex items-center gap-3 text-sm text-slate-400">
-                    <span>Page %d of %d</span>
+                    <span>Page %d%s</span>
                     <div class="flex gap-1">
                         <button class="p-1.5 rounded bg-slate-800 border border-slate-700 hover:bg-slate-700 disabled:opacity-50 transition"
                                 %s hx-get="/jobq/htmx/jobs?status=%s&page=%d" hx-target="#jobs-container">
@@ -179,9 +179,9 @@ public class JobQDashboardController {
                 """
                 .formatted(
                         rows.toString(),
-                        normalizedPage + 1, Math.max(1, jobsPage.getTotalPages()),
+                        normalizedPage + 1, jobsPage.hasNext() ? "+" : "",
                         normalizedPage == 0 ? "disabled" : "", normalizedStatus, Math.max(0, normalizedPage - 1),
-                        normalizedPage >= jobsPage.getTotalPages() - 1 ? "disabled" : "", normalizedStatus,
+                        !jobsPage.hasNext() ? "disabled" : "", normalizedStatus,
                         normalizedPage + 1,
                         normalizedStatus);
     }

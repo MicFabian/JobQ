@@ -40,3 +40,40 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_jobq_jobs_replace_key
     WHERE finished_at IS NULL
       AND failed_at IS NULL
       AND replace_key IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_jobq_jobs_created_at_desc
+    ON jobq_jobs(created_at DESC);
+
+DROP INDEX IF EXISTS idx_jobq_jobs_active_created_at;
+CREATE INDEX IF NOT EXISTS idx_jobq_jobs_pending_created_at
+    ON jobq_jobs(created_at DESC)
+    WHERE finished_at IS NULL
+      AND failed_at IS NULL
+      AND processing_started_at IS NULL;
+
+CREATE INDEX IF NOT EXISTS idx_jobq_jobs_processing_created_at
+    ON jobq_jobs(created_at DESC)
+    WHERE finished_at IS NULL
+      AND failed_at IS NULL;
+
+CREATE INDEX IF NOT EXISTS idx_jobq_jobs_completed_created_at
+    ON jobq_jobs(created_at DESC)
+    WHERE finished_at IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_jobq_jobs_failed_created_at
+    ON jobq_jobs(created_at DESC)
+    WHERE failed_at IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_jobq_jobs_finished_at_cleanup
+    ON jobq_jobs(finished_at)
+    WHERE finished_at IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_jobq_jobs_failed_at_cleanup
+    ON jobq_jobs(failed_at)
+    WHERE failed_at IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_jobq_jobs_active_type_cron
+    ON jobq_jobs(type, cron)
+    WHERE finished_at IS NULL
+      AND failed_at IS NULL
+      AND cron IS NOT NULL;
