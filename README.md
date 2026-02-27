@@ -10,11 +10,13 @@ It is designed for teams that want transactional job enqueueing, high concurrenc
 - Concurrent polling using `FOR UPDATE SKIP LOCKED`
 - Retry handling with backoff and priority shift strategies
 - Recurring jobs via cron on `@Job`
+- Initial enqueue delay via `@Job(initialDelayMs = ...)`
 - Optional job type auto-resolution from `@Job` (no `getJobType()` boilerplate)
 - Annotation-driven jobs with `@Job(payload = ...)` (no interface required)
 - Optional payload type auto-resolution from `JobWorker<T>` when using the interface
 - Optional `onError(...)` hook per job
 - Optional `onSuccess(...)` / `after(...)` hook per job
+- Explicit schedule-at enqueue APIs (`enqueueAt(..., Instant/OffsetDateTime)`)
 - Job grouping (`groupId`) and deduplication (`replaceKey`)
 - Built-in HTMX dashboard (status, payload inspection, restart failed jobs)
 - Dashboard/metrics lifecycle counters fetched via single aggregated query
@@ -216,6 +218,32 @@ Behavior:
 
 - On startup, JobQ bootstraps recurring jobs if no active execution exists
 - After a successful run, JobQ schedules the next run from the cron expression
+
+## Initial Delay and Scheduled Enqueue
+
+Use annotation-level initial delay for regular enqueue calls:
+
+```java
+@Job(value = "sync-customer", initialDelayMs = 300_000) // 5 minutes
+```
+
+Then:
+
+```java
+jobClient.enqueue("sync-customer", payload);
+```
+
+The job is persisted immediately, but will not be picked up until `run_at`.
+
+To set an explicit execution instant at enqueue time:
+
+```java
+jobClient.enqueueAt("sync-customer", payload, java.time.Instant.now().plusSeconds(90));
+// or
+jobClient.enqueueAt("sync-customer", payload, java.time.OffsetDateTime.now().plusMinutes(2));
+```
+
+Explicit `enqueueAt(...)` overrides `@Job(initialDelayMs = ...)` for that enqueue call.
 
 ## Grouping and Deduplication
 

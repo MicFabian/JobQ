@@ -31,6 +31,12 @@ public @interface Job {
     String cron() default "";
 
     /**
+     * Initial delay in milliseconds applied when a job is enqueued without an
+     * explicit run instant.
+     */
+    long initialDelayMs() default 0;
+
+    /**
      * The maximum number of retries before a job is marked as FAILED permanently.
      */
     int maxRetries() default 3;

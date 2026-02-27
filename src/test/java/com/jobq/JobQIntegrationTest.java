@@ -583,6 +583,22 @@ public class JobQIntegrationTest {
             return new LowerPriorityJobWorker();
         }
 
+        @com.jobq.annotation.Job(value = "INITIAL_DELAY_JOB", initialDelayMs = 3000)
+        static class InitialDelayJobWorker implements JobWorker<TestPayload> {
+            @Override
+            public void process(UUID jobId, TestPayload payload) {
+                lastProcessedMessage = payload != null ? payload.getMessage() : null;
+                if (jobLatch != null) {
+                    jobLatch.countDown();
+                }
+            }
+        }
+
+        @Bean
+        JobWorker<TestPayload> initialDelayJobWorker() {
+            return new InitialDelayJobWorker();
+        }
+
         @com.jobq.annotation.Job(value = "RECURRING_JOB", cron = "*/2 * * * * *")
         static class RecurringWorker implements JobWorker<Void> {
             @Override
@@ -1114,6 +1130,50 @@ public class JobQIntegrationTest {
         assertEquals("PENDING", job.getStatus());
 
         jdbcTemplate.update("DELETE FROM jobq_jobs WHERE id = ?", jobId);
+    }
+
+    @Test
+    void shouldApplyInitialDelayFromJobAnnotationWhenEnqueueing() throws InterruptedException {
+        jobLatch = new CountDownLatch(1);
+        lastProcessedMessage = null;
+
+        UUID jobId = jobClient.enqueue("INITIAL_DELAY_JOB", new TestPayload("delayed"));
+        Job queued = jobRepository.findById(jobId).orElseThrow();
+        assertTrue(queued.getRunAt().isAfter(OffsetDateTime.now().plusSeconds(1)));
+
+        Thread.sleep(1200);
+        Job stillPending = jobRepository.findById(jobId).orElseThrow();
+        assertEquals("PENDING", stillPending.getStatus());
+        assertNull(lastProcessedMessage);
+
+        assertTrue(jobLatch.await(12, TimeUnit.SECONDS));
+        await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
+            Job completed = jobRepository.findById(jobId).orElseThrow();
+            assertEquals("COMPLETED", completed.getStatus());
+            assertEquals("delayed", lastProcessedMessage);
+        });
+    }
+
+    @Test
+    void shouldAllowExplicitRunAtOnEnqueueAndOverrideInitialDelay() throws InterruptedException {
+        jobLatch = new CountDownLatch(1);
+        lastProcessedMessage = null;
+        OffsetDateTime scheduledRunAt = OffsetDateTime.now().plusSeconds(1);
+
+        long startNanos = System.nanoTime();
+        UUID jobId = jobClient.enqueueAt("INITIAL_DELAY_JOB", new TestPayload("explicit"), scheduledRunAt);
+
+        assertTrue(jobLatch.await(6, TimeUnit.SECONDS));
+        long elapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNanos);
+        assertTrue(elapsedMs < 3500, "Explicit runAt should override annotation initialDelayMs");
+
+        await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
+            Job completed = jobRepository.findById(jobId).orElseThrow();
+            assertEquals("COMPLETED", completed.getStatus());
+            assertEquals("explicit", lastProcessedMessage);
+            long runAtDeltaMs = Math.abs(Duration.between(scheduledRunAt, completed.getRunAt()).toMillis());
+            assertTrue(runAtDeltaMs < 1000, "Persisted runAt should stay close to explicit schedule");
+        });
     }
 
     @Test
