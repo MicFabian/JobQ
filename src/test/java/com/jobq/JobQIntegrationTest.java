@@ -1363,11 +1363,11 @@ public class JobQIntegrationTest {
     }
 
     @Test
-    void shouldDeduplicateAgainstProcessingJobsWithSameReplaceKey() throws InterruptedException {
+    void shouldCreateNewJobWhenExistingMatchingJobIsProcessing() throws InterruptedException {
         String replaceKey = "processing-key-" + UUID.randomUUID();
         slowJobStartedLatch = new CountDownLatch(1);
         slowJobFinishLatch = new CountDownLatch(1);
-        jobLatch = new CountDownLatch(1);
+        jobLatch = new CountDownLatch(2);
 
         UUID firstId = jobClient.enqueue("SLOW_JOB", new TestPayload("first"), "slow-group", replaceKey);
         assertTrue(slowJobStartedLatch.await(10, TimeUnit.SECONDS));
@@ -1378,7 +1378,7 @@ public class JobQIntegrationTest {
         OffsetDateTime processingStartedAt = processingBefore.getProcessingStartedAt();
 
         UUID secondId = jobClient.enqueue("SLOW_JOB", new TestPayload("second"), "slow-group", replaceKey);
-        assertEquals(firstId, secondId);
+        assertNotEquals(firstId, secondId);
 
         Job stillProcessing = jobRepository.findById(firstId).orElseThrow();
         assertEquals("PROCESSING", stillProcessing.getStatus());
@@ -1389,10 +1389,15 @@ public class JobQIntegrationTest {
                 Integer.class,
                 "SLOW_JOB",
                 replaceKey);
-        assertEquals(1, activeRows);
+        assertEquals(2, activeRows);
 
         slowJobFinishLatch.countDown();
         assertTrue(jobLatch.await(10, TimeUnit.SECONDS));
+
+        await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
+            assertEquals("COMPLETED", jobRepository.findById(firstId).orElseThrow().getStatus());
+            assertEquals("COMPLETED", jobRepository.findById(secondId).orElseThrow().getStatus());
+        });
     }
 
     @Test

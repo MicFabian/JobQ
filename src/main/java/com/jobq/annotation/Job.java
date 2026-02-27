@@ -37,7 +37,7 @@ public @interface Job {
     long initialDelayMs() default 0;
 
     /**
-     * Defines what happens to {@code runAt} when an active deduplicated job is
+     * Defines what happens to {@code runAt} when a pending deduplicated job is
      * replaced via {@code replaceKey}.
      */
     DeduplicationRunAtPolicy deduplicationRunAtPolicy() default DeduplicationRunAtPolicy.UPDATE_ON_REPLACE;

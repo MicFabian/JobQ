@@ -71,8 +71,8 @@ public class JobClient {
 
     /**
      * Enqueue a job with groupId and replaceKey.
-     * If an active job (not finished/failed) with the same type + replaceKey already
-     * exists, JobQ deduplicates and returns that existing job ID.
+     * If a pending job with the same type + replaceKey already exists, JobQ
+     * deduplicates and returns that existing job ID.
      */
     public UUID enqueue(String type, Object payload, String groupId, String replaceKey) {
         return enqueue(type, payload, properties.getJobs().getDefaultNumberOfRetries(), groupId, replaceKey, null);
@@ -131,7 +131,7 @@ public class JobClient {
         // races under high concurrency.
         if (normalizedReplaceKey != null) {
             boolean updateRunAtOnReplace = shouldUpdateRunAtOnReplace(normalizedType, explicitRunAt);
-            UUID dedupedId = upsertActiveDeduplicatedJob(normalizedType, jsonNode, maxRetries, normalizedGroupId,
+            UUID dedupedId = upsertPendingDeduplicatedJob(normalizedType, jsonNode, maxRetries, normalizedGroupId,
                     normalizedReplaceKey, resolvedRunAt, now, updateRunAtOnReplace);
             log.debug("Dedup-enqueued job {} of type {} with replaceKey '{}'", dedupedId, normalizedType,
                     normalizedReplaceKey);
@@ -213,7 +213,7 @@ public class JobClient {
                 .deduplicationRunAtPolicyFor(jobType) == com.jobq.annotation.Job.DeduplicationRunAtPolicy.UPDATE_ON_REPLACE;
     }
 
-    private UUID upsertActiveDeduplicatedJob(String type, JsonNode payload, int maxRetries, String groupId,
+    private UUID upsertPendingDeduplicatedJob(String type, JsonNode payload, int maxRetries, String groupId,
             String replaceKey, OffsetDateTime runAt, OffsetDateTime now, boolean updateRunAtOnReplace) {
         UUID insertedId = UUID.randomUUID();
         String payloadJson = payload == null ? null : payload.toString();
@@ -230,8 +230,6 @@ public class JobClient {
                     ps.setString(7, groupId);
                     ps.setString(8, replaceKey);
                     ps.setBoolean(9, updateRunAtOnReplace);
-                    ps.setString(10, type);
-                    ps.setString(11, replaceKey);
                 },
                 rs -> rs.next() ? rs.getObject("id", UUID.class) : null);
 
@@ -252,39 +250,27 @@ public class JobClient {
 
     private String buildDedupUpsertSql(String tableName) {
         return """
-                WITH dedup AS (
-                    INSERT INTO %1$s (id, type, payload, run_at, updated_at, max_retries, priority, group_id, replace_key)
-                    VALUES (?, ?, CAST(? AS jsonb), ?, ?, ?, 0, ?, ?)
-                    ON CONFLICT (type, replace_key)
-                    WHERE finished_at IS NULL
-                      AND failed_at IS NULL
-                      AND replace_key IS NOT NULL
-                    DO UPDATE SET
-                      payload = EXCLUDED.payload,
-                      run_at = CASE WHEN ? THEN EXCLUDED.run_at ELSE %1$s.run_at END,
-                      updated_at = EXCLUDED.updated_at,
-                      max_retries = EXCLUDED.max_retries,
-                      group_id = EXCLUDED.group_id,
-                      processing_started_at = NULL,
-                      finished_at = NULL,
-                      failed_at = NULL,
-                      error_message = NULL,
-                      retry_count = 0,
-                      locked_at = NULL,
-                      locked_by = NULL
-                    WHERE %1$s.processing_started_at IS NULL
-                    RETURNING id
-                )
-                SELECT id FROM dedup
-                UNION ALL
-                SELECT active.id
-                FROM %1$s active
-                WHERE active.type = ?
-                  AND active.replace_key = ?
-                  AND active.finished_at IS NULL
-                  AND active.failed_at IS NULL
-                  AND NOT EXISTS (SELECT 1 FROM dedup)
-                LIMIT 1
+                INSERT INTO %1$s (id, type, payload, run_at, updated_at, max_retries, priority, group_id, replace_key)
+                VALUES (?, ?, CAST(? AS jsonb), ?, ?, ?, 0, ?, ?)
+                ON CONFLICT (type, replace_key)
+                WHERE processing_started_at IS NULL
+                  AND finished_at IS NULL
+                  AND failed_at IS NULL
+                  AND replace_key IS NOT NULL
+                DO UPDATE SET
+                  payload = EXCLUDED.payload,
+                  run_at = CASE WHEN ? THEN EXCLUDED.run_at ELSE %1$s.run_at END,
+                  updated_at = EXCLUDED.updated_at,
+                  max_retries = EXCLUDED.max_retries,
+                  group_id = EXCLUDED.group_id,
+                  processing_started_at = NULL,
+                  finished_at = NULL,
+                  failed_at = NULL,
+                  error_message = NULL,
+                  retry_count = 0,
+                  locked_at = NULL,
+                  locked_by = NULL
+                RETURNING id
                 """.formatted(tableName);
     }
 }
