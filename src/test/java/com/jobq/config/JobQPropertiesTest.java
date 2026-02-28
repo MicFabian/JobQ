@@ -31,6 +31,7 @@ public class JobQPropertiesTest {
             assertEquals(JobQProperties.Dashboard.AuthMode.BASIC, properties.getDashboard().getAuthMode());
             assertEquals("JOBQ_DASHBOARD", properties.getDashboard().getRequiredRole());
             assertFalse(properties.getDatabase().isSkipCreate());
+            assertTrue(properties.getDatabase().isFailOnMigrationError());
         });
     }
 
@@ -44,7 +45,8 @@ public class JobQPropertiesTest {
                         "jobq.dashboard.path=/custom/path",
                         "jobq.dashboard.auth-mode=SPRING_SECURITY",
                         "jobq.dashboard.required-role=OPS_DASHBOARD",
-                        "jobq.database.skip-create=true")
+                        "jobq.database.skip-create=true",
+                        "jobq.database.fail-on-migration-error=false")
                 .run(context -> {
                     JobQProperties properties = context.getBean(JobQProperties.class);
                     assertEquals(1, properties.getBackgroundJobServer().getPollIntervalInSeconds());
@@ -54,6 +56,7 @@ public class JobQPropertiesTest {
                     assertEquals(JobQProperties.Dashboard.AuthMode.SPRING_SECURITY, properties.getDashboard().getAuthMode());
                     assertEquals("OPS_DASHBOARD", properties.getDashboard().getRequiredRole());
                     assertTrue(properties.getDatabase().isSkipCreate());
+                    assertFalse(properties.getDatabase().isFailOnMigrationError());
                 });
     }
 }

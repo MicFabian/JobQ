@@ -13,6 +13,7 @@ import static org.mockito.Mockito.mock;
 class JobSchemaInitializerConditionalTest {
 
     private final ApplicationContextRunner contextRunner = new ApplicationContextRunner()
+            .withPropertyValues("jobq.database.fail-on-migration-error=false")
             .withUserConfiguration(JobSchemaInitializer.class)
             .withBean(DataSource.class, () -> mock(DataSource.class));
 

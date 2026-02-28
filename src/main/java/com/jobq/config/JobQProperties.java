@@ -32,6 +32,7 @@ public class JobQProperties {
     public static class Database {
         private String tablePrefix = "";
         private boolean skipCreate = false;
+        private boolean failOnMigrationError = true;
 
         public String getTablePrefix() {
             return tablePrefix;
@@ -47,6 +48,14 @@ public class JobQProperties {
 
         public void setSkipCreate(boolean skipCreate) {
             this.skipCreate = skipCreate;
+        }
+
+        public boolean isFailOnMigrationError() {
+            return failOnMigrationError;
+        }
+
+        public void setFailOnMigrationError(boolean failOnMigrationError) {
+            this.failOnMigrationError = failOnMigrationError;
         }
     }
 

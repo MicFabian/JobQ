@@ -48,7 +48,8 @@ jobq:
     permanently-delete-deleted-jobs-after: 72h
 
   database:
-    skip-create: false            # true = do not auto-run jobq-schema.sql
+    skip-create: false            # true = disable built-in JobQ migrations
+    fail-on-migration-error: true # fail startup when migration execution fails
     table-prefix: ""
 
   dashboard:
@@ -161,16 +162,33 @@ public class UserService {
 
 If the transaction rolls back, the job is not persisted.
 
-## Schema Initialization
+## Schema Migrations
 
-By default, JobQ auto-runs `jobq-schema.sql` at startup.
+By default, JobQ runs versioned SQL migrations at startup from:
 
-Disable schema auto-creation when your project manages DDL externally:
+- `classpath:jobq/migration/V{version}__{description}.sql`
+
+Behavior:
+
+- migration history is stored in `jobq_schema_migrations`
+- applied script checksums are validated on startup
+- only pending versions are executed
+- Postgres advisory lock is used so only one node migrates at a time
+
+Disable built-in migrations when your project manages DDL externally:
 
 ```yaml
 jobq:
   database:
     skip-create: true
+```
+
+If you want startup to continue on migration failure (not recommended):
+
+```yaml
+jobq:
+  database:
+    fail-on-migration-error: false
 ```
 
 ## Retry, Backoff, Priority
@@ -363,9 +381,8 @@ Scenarios covered:
 
 ## Schema
 
-JobQ can auto-initialize schema from `jobq-schema.sql`.
-
-Main table: `jobq_jobs`
+Main table: `jobq_jobs`  
+Migration history table: `jobq_schema_migrations`
 
 Important columns:
 
@@ -380,6 +397,8 @@ Important indexes:
 - unique partial index on `(type, replace_key)` for pending rows
 - status/listing indexes on `created_at` for dashboard pagination
 - cleanup indexes on `finished_at` and `failed_at` for retention deletes
+
+Migration scripts live in `src/main/resources/jobq/migration` and are applied in version order (`V1__...`, `V2__...`, `V2_1__...`).
 
 ## Design Notes
 

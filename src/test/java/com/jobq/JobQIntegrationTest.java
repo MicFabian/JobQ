@@ -739,6 +739,25 @@ public class JobQIntegrationTest {
     }
 
     @Test
+    void shouldTrackAppliedSchemaMigrations() {
+        Integer migrationTableCount = jdbcTemplate.queryForObject(
+                "SELECT count(*) FROM information_schema.tables WHERE table_name = 'jobq_schema_migrations'",
+                Integer.class);
+        assertEquals(1, migrationTableCount);
+
+        Integer baselineMigrationCount = jdbcTemplate.queryForObject(
+                "SELECT count(*) FROM jobq_schema_migrations WHERE version = '1'",
+                Integer.class);
+        assertEquals(1, baselineMigrationCount);
+
+        String checksum = jdbcTemplate.queryForObject(
+                "SELECT checksum FROM jobq_schema_migrations WHERE version = '1'",
+                String.class);
+        assertNotNull(checksum);
+        assertFalse(checksum.isBlank());
+    }
+
+    @Test
     void shouldRollBackEnqueuedJobWhenOuterTransactionFails() {
         AtomicReference<UUID> jobIdRef = new AtomicReference<>();
 
