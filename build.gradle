@@ -1,17 +1,27 @@
 plugins {
     id 'java-library'
+    id 'groovy'
     id 'org.springframework.boot' version '4.0.0-SNAPSHOT' apply false
     id 'io.spring.dependency-management' version '1.1.4'
-    id 'groovy'
+    id 'maven-publish'
+    id 'signing'
+    id 'io.github.gradle-nexus.publish-plugin' version '2.0.0'
 }
 
-group = 'com.example'
-version = '0.0.1-SNAPSHOT'
+group = 'io.github.micfabian'
+def defaultVersion = '0.0.1-SNAPSHOT'
+version = (findProperty('releaseVersion') ?: System.getenv('RELEASE_VERSION') ?: defaultVersion).toString()
+def isReleaseVersion = !version.toString().endsWith('-SNAPSHOT')
+def prop = { String key, String fallback = '' ->
+    (findProperty(key) ?: fallback).toString()
+}
 
 java {
     toolchain {
         languageVersion = JavaLanguageVersion.of(25)
     }
+    withSourcesJar()
+    withJavadocJar()
 }
 
 repositories {
@@ -71,6 +81,11 @@ tasks.withType(Test) {
     jvmArgs "-Dnet.bytebuddy.experimental=true", "-XX:+EnableDynamicAgentLoading", "-Xshare:off"
 }
 
+tasks.withType(Javadoc).configureEach {
+    options.encoding = 'UTF-8'
+    options.addBooleanOption('Xdoclint:none', true)
+}
+
 tasks.register('loadTest', Test) {
     useJUnitPlatform {
         includeTags 'load'
@@ -90,5 +105,79 @@ tasks.register('perfTest', Test) {
     testLogging {
         events "passed", "failed", "skipped"
         showStandardStreams = true
+    }
+}
+
+publishing {
+    publications {
+        mavenJava(MavenPublication) {
+            from components.java
+            artifactId = 'jobq-spring-boot-starter'
+            pom {
+                name = prop('POM_NAME', 'JobQ Spring Boot Starter')
+                description = prop('POM_DESCRIPTION',
+                        'PostgreSQL-backed background job processing for Spring Boot with transactional enqueueing.')
+                url = prop('POM_URL', 'https://github.com/MicFabian/JobQ')
+
+                licenses {
+                    license {
+                        name = prop('POM_LICENSE_NAME', 'The Apache License, Version 2.0')
+                        url = prop('POM_LICENSE_URL', 'https://www.apache.org/licenses/LICENSE-2.0.txt')
+                        distribution = 'repo'
+                    }
+                }
+
+                developers {
+                    developer {
+                        id = prop('POM_DEVELOPER_ID', 'micfabian')
+                        name = prop('POM_DEVELOPER_NAME', 'Michael Fabian')
+                        email = prop('POM_DEVELOPER_EMAIL', 'mvirks@web.de')
+                    }
+                }
+
+                scm {
+                    connection = prop('POM_SCM_CONNECTION', 'scm:git:https://github.com/MicFabian/JobQ.git')
+                    developerConnection = prop('POM_SCM_DEV_CONNECTION', 'scm:git:ssh://git@github.com:MicFabian/JobQ.git')
+                    url = prop('POM_SCM_URL', 'https://github.com/MicFabian/JobQ')
+                }
+            }
+        }
+    }
+}
+
+signing {
+    required = isReleaseVersion
+    def signingKey = findProperty('signingKey')?.toString()
+    def signingPassword = findProperty('signingPassword')?.toString()
+    if (signingKey) {
+        def normalizedSigningKey = signingKey
+                .replace('\r', '')
+                .replace('\\n', '\n')
+                .trim()
+        useInMemoryPgpKeys(normalizedSigningKey, signingPassword)
+    } else {
+        useGpgCmd()
+    }
+    sign publishing.publications
+}
+
+nexusPublishing {
+    repositories {
+        sonatype {
+            nexusUrl = uri('https://ossrh-staging-api.central.sonatype.com/service/local/')
+            snapshotRepositoryUrl = uri('https://central.sonatype.com/repository/maven-snapshots/')
+            username = prop('sonatypeUsername')
+            password = prop('sonatypePassword')
+        }
+    }
+}
+
+tasks.register('publishToMavenCentral') {
+    group = 'publishing'
+    description = 'Publishes this project to Maven Central via Sonatype Central Portal'
+    if (isReleaseVersion) {
+        dependsOn 'publishToSonatype', 'closeAndReleaseSonatypeStagingRepository'
+    } else {
+        dependsOn 'publishToSonatype'
     }
 }

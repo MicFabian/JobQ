@@ -33,7 +33,7 @@ It is designed for teams that want transactional job enqueueing, high concurrenc
 ## Installation
 
 ```groovy
-implementation 'com.jobq:jobq-spring-boot-starter:1.0.0'
+implementation 'io.github.micfabian:jobq-spring-boot-starter:1.0.0'
 ```
 
 ## Configuration
@@ -378,6 +378,71 @@ Scenarios covered:
 - mixed retry/exponential-error handling + expected-exception completion paths
 - scheduled `runAt` execution at scale
 - dedicated enqueue and end-to-end throughput benchmarks with timing output
+
+## Publishing to Maven Central
+
+Publish release:
+
+```bash
+./gradlew publishToMavenCentral -PreleaseVersion=1.0.0
+```
+
+Publish snapshot:
+
+```bash
+./gradlew publishToMavenCentral -PreleaseVersion=1.0.1-SNAPSHOT
+```
+
+Supported publishing-related Gradle properties:
+
+- `releaseVersion` (overrides project version)
+- `sonatypeUsername`
+- `sonatypePassword`
+- `signingKey`
+- `signingPassword`
+
+If Sonatype fails closing staging due missing public key fingerprint resolution, upload your public key to supported key servers and retry after propagation.
+
+## GitHub Actions (CI + Release)
+
+### CI workflow
+
+`.github/workflows/ci.yml`:
+
+- runs on pull requests
+- runs on pushes to `main`
+- validates Gradle wrapper
+- runs `./gradlew --no-daemon test`
+
+### Release workflow
+
+`.github/workflows/release.yml`:
+
+- runs on tag push `v*` (example `v1.0.0`)
+- can also run manually (`workflow_dispatch`) with `version`
+- validates version format
+- runs `./gradlew --no-daemon clean test -PreleaseVersion=<version>`
+- publishes with `./gradlew --no-daemon publishToMavenCentral -PreleaseVersion=<version>`
+
+Required repository secrets:
+
+- `SONATYPE_USERNAME`
+- `SONATYPE_PASSWORD`
+- `SIGNING_KEY`
+- `SIGNING_PASSWORD`
+
+Trigger release by tag:
+
+```bash
+git tag -a v1.0.0 -m "Release 1.0.0"
+git push origin v1.0.0
+```
+
+Or trigger manual release:
+
+```bash
+gh workflow run Release --ref main -f version=1.0.0
+```
 
 ## Schema
 
