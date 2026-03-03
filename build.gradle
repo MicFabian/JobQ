@@ -113,6 +113,14 @@ publishing {
         mavenJava(MavenPublication) {
             from components.java
             artifactId = 'jobq-spring-boot-starter'
+            versionMapping {
+                usage('java-api') {
+                    fromResolutionOf('runtimeClasspath')
+                }
+                usage('java-runtime') {
+                    fromResolutionResult()
+                }
+            }
             pom {
                 name = prop('POM_NAME', 'JobQ Spring Boot Starter')
                 description = prop('POM_DESCRIPTION',
