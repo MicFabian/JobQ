@@ -9,17 +9,18 @@ import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.hibernate.autoconfigure.HibernatePropertiesCustomizer;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
+import org.springframework.boot.persistence.autoconfigure.EntityScan;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.ComponentScan;
+import org.springframework.data.jpa.repository.config.EnableJpaRepositories;
 import org.springframework.scheduling.annotation.EnableScheduling;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
-import io.micrometer.core.instrument.MeterRegistry;
-import com.jobq.internal.JobQMetrics;
 
 import java.util.Locale;
 
 @AutoConfiguration
 @ComponentScan("com.jobq")
+@EntityScan(basePackageClasses = Job.class)
+@EnableJpaRepositories(basePackageClasses = JobRepository.class)
 @EnableScheduling
 @EnableConfigurationProperties(JobQProperties.class)
 public class JobQAutoConfiguration {
@@ -55,9 +56,4 @@ public class JobQAutoConfiguration {
         };
     }
 
-    @Bean
-    @ConditionalOnBean(MeterRegistry.class)
-    public JobQMetrics jobqMetrics(JobRepository jobRepository, MeterRegistry meterRegistry) {
-        return new JobQMetrics(jobRepository, meterRegistry);
-    }
 }

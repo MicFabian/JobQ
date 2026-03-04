@@ -33,7 +33,7 @@ It is designed for teams that want transactional job enqueueing, high concurrenc
 ## Installation
 
 ```groovy
-implementation 'io.github.micfabian:jobq-spring-boot-starter:1.0.0'
+implementation 'io.github.micfabian:jobq-spring-boot-starter:0.0.2'
 ```
 
 ## Configuration
@@ -355,6 +355,8 @@ When Micrometer is on the classpath, JobQ registers:
 - `jobq.jobs.total`
 - `jobq.jobs.count{status="PENDING|PROCESSING|COMPLETED|FAILED"}`
 
+If Micrometer is not present, JobQ starts normally and simply skips metrics bean registration.
+
 ## Load Testing
 
 JobQ includes dedicated load/stress tests against PostgreSQL Testcontainers.
@@ -384,13 +386,13 @@ Scenarios covered:
 Publish release:
 
 ```bash
-./gradlew publishToMavenCentral -PreleaseVersion=1.0.0
+./gradlew publishToMavenCentral -PreleaseVersion=0.0.2
 ```
 
 Publish snapshot:
 
 ```bash
-./gradlew publishToMavenCentral -PreleaseVersion=1.0.1-SNAPSHOT
+./gradlew publishToMavenCentral -PreleaseVersion=0.0.3-SNAPSHOT
 ```
 
 Supported publishing-related Gradle properties:
@@ -418,7 +420,7 @@ If Sonatype fails closing staging due missing public key fingerprint resolution,
 
 `.github/workflows/release.yml`:
 
-- runs on tag push `v*` (example `v1.0.0`)
+- runs on tag push `v*` (example `v0.0.2`)
 - can also run manually (`workflow_dispatch`) with `version`
 - validates version format
 - runs `./gradlew --no-daemon clean test -PreleaseVersion=<version>`
@@ -434,14 +436,14 @@ Required repository secrets:
 Trigger release by tag:
 
 ```bash
-git tag -a v1.0.0 -m "Release 1.0.0"
-git push origin v1.0.0
+git tag -a v0.0.2 -m "Release 0.0.2"
+git push origin v0.0.2
 ```
 
 Or trigger manual release:
 
 ```bash
-gh workflow run Release --ref main -f version=1.0.0
+gh workflow run Release --ref main -f version=0.0.2
 ```
 
 ## Schema

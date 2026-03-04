@@ -9,7 +9,7 @@ plugins {
 }
 
 group = 'io.github.micfabian'
-def defaultVersion = '0.0.1-SNAPSHOT'
+def defaultVersion = '0.0.2-SNAPSHOT'
 version = (findProperty('releaseVersion') ?: System.getenv('RELEASE_VERSION') ?: defaultVersion).toString()
 def isReleaseVersion = !version.toString().endsWith('-SNAPSHOT')
 def prop = { String key, String fallback = '' ->
