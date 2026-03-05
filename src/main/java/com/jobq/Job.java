@@ -71,7 +71,9 @@ public class Job {
     private String cron;
 
     public Job() {
-        this.runAt = OffsetDateTime.now();
+        OffsetDateTime now = OffsetDateTime.now();
+        this.runAt = now;
+        this.updatedAt = now;
     }
 
     public Job(UUID id, String type, com.fasterxml.jackson.databind.JsonNode payload, int maxRetries, int priority) {
@@ -80,7 +82,9 @@ public class Job {
         this.payload = payload;
         this.maxRetries = maxRetries;
         this.priority = priority;
-        this.runAt = OffsetDateTime.now();
+        OffsetDateTime now = OffsetDateTime.now();
+        this.runAt = now;
+        this.updatedAt = now;
     }
 
     public Job(UUID id, String type, com.fasterxml.jackson.databind.JsonNode payload, int maxRetries, int priority,

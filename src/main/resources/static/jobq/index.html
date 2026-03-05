@@ -5,8 +5,20 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>JobQ Platform Dashboard</title>
+    <link rel="icon" href="/favicon.ico" sizes="any">
     <!-- HTMX -->
     <script src="https://unpkg.com/htmx.org@2.0.4"></script>
+    <script>
+        // Keep browser console noise-free for embedded dashboard usage.
+        const jobqOriginalWarn = console.warn.bind(console);
+        console.warn = (...args) => {
+            const first = args.length > 0 ? args[0] : null;
+            if (typeof first === 'string' && first.includes('cdn.tailwindcss.com should not be used in production')) {
+                return;
+            }
+            jobqOriginalWarn(...args);
+        };
+    </script>
     <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
     <script>

@@ -8,6 +8,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
@@ -78,6 +79,9 @@ class JobQDashboardIntegrationTest {
     @Autowired
     ObjectMapper objectMapper;
 
+    @Autowired
+    JdbcTemplate jdbcTemplate;
+
     @BeforeEach
     void setUp() {
         mockMvc = MockMvcBuilders.webAppContextSetup(webApplicationContext).build();
@@ -91,6 +95,19 @@ class JobQDashboardIntegrationTest {
 
         mockMvc.perform(get("/jobq/dashboard"))
                 .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    void shouldServeFavicon() throws Exception {
+        mockMvc.perform(get("/favicon.ico"))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    void shouldEnforceTimestampDefaultsAndNotNullConstraints() {
+        assertTimestampColumnConfigured("created_at");
+        assertTimestampColumnConfigured("updated_at");
+        assertTimestampColumnConfigured("run_at");
     }
 
     @Test
@@ -283,5 +300,33 @@ class JobQDashboardIntegrationTest {
             values.add(Integer.parseInt(matcher.group(1)));
         }
         return values;
+    }
+
+    private void assertTimestampColumnConfigured(String columnName) {
+        String defaultValue = jdbcTemplate.queryForObject(
+                """
+                        SELECT column_default
+                        FROM information_schema.columns
+                        WHERE table_schema = 'public'
+                          AND table_name = 'jobq_jobs'
+                          AND column_name = ?
+                        """,
+                String.class,
+                columnName);
+        assertNotNull(defaultValue);
+        String normalizedDefault = defaultValue.toLowerCase();
+        assertTrue(normalizedDefault.contains("now()") || normalizedDefault.contains("current_timestamp"));
+
+        String isNullable = jdbcTemplate.queryForObject(
+                """
+                        SELECT is_nullable
+                        FROM information_schema.columns
+                        WHERE table_schema = 'public'
+                          AND table_name = 'jobq_jobs'
+                          AND column_name = ?
+                        """,
+                String.class,
+                columnName);
+        assertEquals("NO", isNullable);
     }
 }
