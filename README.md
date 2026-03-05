@@ -162,6 +162,8 @@ public class UserService {
 
 If the transaction rolls back, the job is not persisted.
 
+JobQ auto-registers its own JPA entity/repository package (`com.jobq`) without requiring app-side `@EntityScan`/`@EnableJpaRepositories` changes.
+
 ## Schema Migrations
 
 By default, JobQ runs versioned SQL migrations at startup from:

@@ -7,6 +7,8 @@ import jakarta.persistence.EntityManagerFactory;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.boot.persistence.autoconfigure.EntityScan;
+import org.springframework.data.jpa.repository.config.EnableJpaRepositories;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
@@ -52,6 +54,9 @@ class JobQStarterConsumerIntegrationTest {
     JobRepository jobRepository;
 
     @Autowired
+    ConsumerNoteRepository consumerNoteRepository;
+
+    @Autowired
     JobClient jobClient;
 
     @Autowired
@@ -63,8 +68,18 @@ class JobQStarterConsumerIntegrationTest {
     }
 
     @Test
+    void shouldKeepConsumerRepositoryRegistrationWorking() {
+        assertNotNull(consumerNoteRepository);
+    }
+
+    @Test
     void shouldAutoRegisterJobEntityWithoutConsumerEntityScan() {
         assertDoesNotThrow(() -> entityManagerFactory.getMetamodel().entity(Job.class));
+    }
+
+    @Test
+    void shouldKeepConsumerEntityRegistrationWorking() {
+        assertDoesNotThrow(() -> entityManagerFactory.getMetamodel().entity(ConsumerNote.class));
     }
 
     @Test
@@ -74,6 +89,8 @@ class JobQStarterConsumerIntegrationTest {
     }
 
     @SpringBootApplication(scanBasePackages = "com.example.jobqconsumer")
+    @EntityScan(basePackageClasses = ConsumerNote.class)
+    @EnableJpaRepositories(basePackageClasses = ConsumerNoteRepository.class)
     static class ConsumerApplication {
     }
 }
