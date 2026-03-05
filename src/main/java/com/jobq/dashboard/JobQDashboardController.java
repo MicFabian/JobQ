@@ -9,7 +9,9 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Slice;
 import org.springframework.data.domain.Sort;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -18,6 +20,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.time.format.DateTimeFormatter;
+import java.time.OffsetDateTime;
 import java.util.UUID;
 
 @RestController
@@ -29,6 +32,8 @@ public class JobQDashboardController {
     private final ObjectMapper objectMapper;
     private static final DateTimeFormatter FORMATTER = DateTimeFormatter.ofPattern("MMM dd HH:mm:ss");
     private static final DateTimeFormatter EXACT_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
+    private static final UUID ZERO_UUID = new UUID(0L, 0L);
+    private static final int MAX_QUERY_LENGTH = 200;
 
     public JobQDashboardController(JobRepository jobRepository, ObjectMapper objectMapper) {
         this.jobRepository = jobRepository;
@@ -36,8 +41,11 @@ public class JobQDashboardController {
     }
 
     @GetMapping(value = "/stats", produces = MediaType.TEXT_HTML_VALUE)
-    public String getStats(@RequestParam(name = "filter", required = false, defaultValue = "") String filter) {
-        String normalizedFilter = normalizeStatus(filter);
+    public String getStats(
+            @RequestParam(name = "filter", required = false, defaultValue = "") String filter,
+            @RequestParam(name = "status", required = false, defaultValue = "") String status) {
+        String effectiveFilter = filter != null && !filter.isBlank() ? filter : status;
+        String normalizedFilter = normalizeStatus(effectiveFilter);
         JobRepository.LifecycleCounts lifecycleCounts = jobRepository.countLifecycleCounts();
         long pending = countOrZero(lifecycleCounts.getPendingCount());
         long processing = countOrZero(lifecycleCounts.getProcessingCount());
@@ -68,45 +76,48 @@ public class JobQDashboardController {
     private String statCard(String title, long value, String targetFilter, String activeFilter, String ringClass,
             String textClass, String iconHtml) {
         String activeState = activeFilter.equals(targetFilter) ? "ring-2 " + ringClass : "";
+        String escapedFilter = escapeJs(targetFilter);
         return """
                 <div class="bg-slate-900 border border-slate-800 rounded-xl p-5 cursor-pointer hover:-translate-y-1 hover:shadow-lg hover:shadow-indigo-500/10 transition-all duration-200 %s"
-                     hx-get="/jobq/htmx/jobs?status=%s&page=0"
-                     hx-target="#jobs-container"
-                     hx-on::after-request="document.querySelectorAll('input[name=status]').forEach(e=>e.value='%s')">
+                     role="button"
+                     tabindex="0"
+                     hx-on:click="document.querySelectorAll('input[name=status]').forEach(e=>e.value='%s');document.querySelectorAll('select[name=statusFilter]').forEach(e=>e.value='%s');document.querySelectorAll('input[name=page]').forEach(e=>e.value='0');htmx.trigger(document.body,'jobq-refresh')"
+                     hx-on:keydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();document.querySelectorAll('input[name=status]').forEach(e=>e.value='%s');document.querySelectorAll('select[name=statusFilter]').forEach(e=>e.value='%s');document.querySelectorAll('input[name=page]').forEach(e=>e.value='0');htmx.trigger(document.body,'jobq-refresh')}">
                     <div class="%s text-xs font-semibold uppercase tracking-wider mb-2 flex items-center gap-1.5 opacity-80">
                         %s %s
                     </div>
                     <div class="text-3xl font-bold text-slate-100">%d</div>
                 </div>
                 """
-                .formatted(activeState, targetFilter, targetFilter, textClass, iconHtml, title, value);
+                .formatted(activeState, escapedFilter, escapedFilter, escapedFilter, escapedFilter, textClass, iconHtml,
+                        title, value);
     }
 
     @GetMapping(value = "/jobs", produces = MediaType.TEXT_HTML_VALUE)
-    public String getJobs(
+    public ResponseEntity<String> getJobs(
             @RequestParam(name = "page", defaultValue = "0") int page,
             @RequestParam(name = "size", defaultValue = "50") int size,
-            @RequestParam(name = "status", required = false, defaultValue = "") String status) {
+            @RequestParam(name = "status", required = false, defaultValue = "") String status,
+            @RequestParam(name = "query", required = false, defaultValue = "") String query,
+            @RequestParam(name = "sort", required = false, defaultValue = "created-desc") String sort,
+            @RequestParam(name = "scheduledOnly", required = false, defaultValue = "false") boolean scheduledOnly,
+            @RequestParam(name = "retriedOnly", required = false, defaultValue = "false") boolean retriedOnly) {
         String normalizedStatus = normalizeStatus(status);
-
         int normalizedPage = Math.max(0, page);
         int normalizedSize = Math.max(1, Math.min(200, size));
-        PageRequest pageRequest = PageRequest.of(normalizedPage, normalizedSize, Sort.by(Sort.Direction.DESC, "createdAt"));
-        Slice<Job> jobsPage = switch (normalizedStatus) {
-            case "PENDING" -> jobRepository.findPendingJobs(pageRequest);
-            case "PROCESSING" -> jobRepository.findProcessingJobs(pageRequest);
-            case "COMPLETED" -> jobRepository.findCompletedJobs(pageRequest);
-            case "FAILED" -> jobRepository.findFailedJobs(pageRequest);
-            default -> jobRepository.findAllJobs(pageRequest);
-        };
+        String normalizedQuery = normalizeQuery(query);
+        String normalizedSort = normalizeSort(sort);
+        Slice<JobRepository.DashboardJobView> jobsPage = loadDashboardJobsSlice(normalizedStatus, normalizedPage,
+                normalizedSize, normalizedQuery, normalizedSort, scheduledOnly, retriedOnly);
+        OffsetDateTime now = OffsetDateTime.now();
 
-        StringBuilder rows = new StringBuilder();
+        StringBuilder rows = new StringBuilder(Math.max(512, normalizedSize * 640));
 
         if (jobsPage.isEmpty()) {
             rows.append(
                     """
                             <tr>
-                              <td colspan="8" class="px-6 py-12 text-center text-slate-400">
+                              <td colspan="9" class="px-6 py-12 text-center text-slate-400">
                                 <div class="flex flex-col items-center justify-center">
                                   <svg class="w-10 h-10 mb-3 opacity-50" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4"></path></svg>
                                   <span class="text-lg font-medium">No jobs found %s</span>
@@ -116,12 +127,15 @@ public class JobQDashboardController {
                             """
                             .formatted(!normalizedStatus.isBlank() ? "in " + normalizedStatus : ""));
         } else {
-            for (Job job : jobsPage.getContent()) {
-                String statusLabel = job.getStatus();
+            for (JobRepository.DashboardJobView job : jobsPage.getContent()) {
+                String statusLabel = resolveStatus(job);
+                String timeline = formatTimeline(job, statusLabel, now);
+                String failedInfo = formatFailedInfo(job);
+                String rowRetryButton = rowRetryButtonHtml(statusLabel, job.getId());
                 rows.append(
                         """
                                 <tr class="hover:bg-slate-800/50 transition-colors border-b border-slate-800/50 group cursor-pointer"
-                                    hx-get="/jobq/htmx/job/%s" hx-target="#modal-container" hx-swap="innerHTML">
+                                    hx-get="/jobq/htmx/job/%s" hx-target="#modal-container" hx-swap="innerHTML" hx-indicator="#jobq-loading-indicator">
                                     <td class="px-6 py-3">
                                         <span class="px-2.5 py-1 rounded-full text-xs font-medium border %s">
                                             %s
@@ -135,11 +149,15 @@ public class JobQDashboardController {
                                     <td class="px-6 py-3 text-slate-400 text-sm">%s</td>
                                     <td class="px-6 py-3 text-slate-400 text-sm">%s</td>
                                     <td class="px-6 py-3 text-slate-400 text-sm">%s</td>
+                                    <td class="px-6 py-3 text-slate-400 text-sm max-w-[22rem]">%s</td>
                                     <td class="px-6 py-3 font-mono text-xs text-slate-500">%s</td>
                                     <td class="px-6 py-3 text-right">
-                                       <span class="text-indigo-400 text-xs font-semibold opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-end gap-1">
-                                         Details <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path></svg>
-                                       </span>
+                                       <div class="flex items-center justify-end gap-2">
+                                         %s
+                                         <span class="text-indigo-400 text-xs font-semibold opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-end gap-1">
+                                           Details <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path></svg>
+                                         </span>
+                                       </div>
                                     </td>
                                 </tr>
                                 """
@@ -153,37 +171,37 @@ public class JobQDashboardController {
                                         job.getRetryCount(), job.getMaxRetries(), job.getPriority(),
                                         job.getGroupId() != null ? escapeHtml(job.getGroupId()) : "—",
                                         job.getReplaceKey() != null ? escapeHtml(job.getReplaceKey()) : "—",
-                                        job.getCreatedAt() != null ? job.getCreatedAt().format(FORMATTER) : "—",
-                                        job.getId().toString().substring(0, 8) + "..."));
+                                        timeline,
+                                        failedInfo,
+                                        job.getId().toString().substring(0, 8) + "...",
+                                        rowRetryButton));
             }
         }
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CONTENT_TYPE, MediaType.TEXT_HTML_VALUE)
+                .header("HX-Trigger",
+                        "{\"jobqPagination\":{\"page\":" + normalizedPage + ",\"hasNext\":" + jobsPage.hasNext()
+                                + "}}")
+                .body(rows.toString());
+    }
 
-        // Return the actual table body along with Out-of-Band updates for pagination
-        // and triggers for stats
-        return """
-                %s
-                <div id="pagination-controls" hx-swap-oob="true" class="flex items-center gap-3 text-sm text-slate-400">
-                    <span>Page %d%s</span>
-                    <div class="flex gap-1">
-                        <button class="p-1.5 rounded bg-slate-800 border border-slate-700 hover:bg-slate-700 disabled:opacity-50 transition"
-                                %s hx-get="/jobq/htmx/jobs?status=%s&page=%d" hx-target="#jobs-container">
-                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"></path></svg>
-                        </button>
-                        <button class="p-1.5 rounded bg-slate-800 border border-slate-700 hover:bg-slate-700 disabled:opacity-50 transition"
-                                %s hx-get="/jobq/htmx/jobs?status=%s&page=%d" hx-target="#jobs-container">
-                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path></svg>
-                        </button>
-                    </div>
-                </div>
-                <div id="stats-trigger" hx-swap-oob="true" hx-get="/jobq/htmx/stats?filter=%s" hx-trigger="load" hx-target="#stats-container"></div>
-                """
-                .formatted(
-                        rows.toString(),
-                        normalizedPage + 1, jobsPage.hasNext() ? "+" : "",
-                        normalizedPage == 0 ? "disabled" : "", normalizedStatus, Math.max(0, normalizedPage - 1),
-                        !jobsPage.hasNext() ? "disabled" : "", normalizedStatus,
-                        normalizedPage + 1,
-                        normalizedStatus);
+    @GetMapping(value = "/pagination", produces = MediaType.TEXT_HTML_VALUE)
+    public String getPagination(
+            @RequestParam(name = "page", defaultValue = "0") int page,
+            @RequestParam(name = "size", defaultValue = "50") int size,
+            @RequestParam(name = "status", required = false, defaultValue = "") String status,
+            @RequestParam(name = "query", required = false, defaultValue = "") String query,
+            @RequestParam(name = "sort", required = false, defaultValue = "created-desc") String sort,
+            @RequestParam(name = "scheduledOnly", required = false, defaultValue = "false") boolean scheduledOnly,
+            @RequestParam(name = "retriedOnly", required = false, defaultValue = "false") boolean retriedOnly) {
+        String normalizedStatus = normalizeStatus(status);
+        int normalizedPage = Math.max(0, page);
+        int normalizedSize = Math.max(1, Math.min(200, size));
+        String normalizedQuery = normalizeQuery(query);
+        String normalizedSort = normalizeSort(sort);
+        Slice<JobRepository.DashboardJobView> jobsPage = loadDashboardJobsSlice(normalizedStatus, normalizedPage,
+                normalizedSize, normalizedQuery, normalizedSort, scheduledOnly, retriedOnly);
+        return renderPaginationControls(normalizedStatus, normalizedPage, jobsPage.hasNext());
     }
 
     @GetMapping(value = "/job/{id}", produces = MediaType.TEXT_HTML_VALUE)
@@ -313,13 +331,13 @@ public class JobQDashboardController {
         }).orElse("<div class='p-4 text-red-500'>Job not found.</div>");
     }
 
-    @PostMapping(value = "/job/{id}/restart", produces = MediaType.TEXT_HTML_VALUE)
-    public String restartJob(@PathVariable("id") UUID id) {
-        return jobRepository.findById(id).map(job -> {
+    @PostMapping(value = { "/job/{id}/restart", "/job/{id}/retry" }, produces = MediaType.TEXT_HTML_VALUE)
+    public ResponseEntity<String> retryJob(@PathVariable("id") UUID id) {
+        String body = jobRepository.findById(id).map(job -> {
             if (job.getFailedAt() == null) {
                 return """
                         <div class="p-4 text-center text-amber-300 font-semibold">
-                            Job %s is not in FAILED state and cannot be restarted.
+                            Job %s is not in FAILED state and cannot be retried.
                         </div>
                         """.formatted(id.toString().substring(0, 8));
             }
@@ -336,10 +354,14 @@ public class JobQDashboardController {
             jobRepository.save(job);
             return """
                     <div class="p-4 text-center text-emerald-400 font-semibold">
-                        ✅ Job %s has been restarted. It will be picked up on the next poll cycle.
+                        ✅ Job %s has been queued for retry. It will be picked up on the next poll cycle.
                     </div>
                     """.formatted(id.toString().substring(0, 8));
         }).orElse("<div class='p-4 text-red-500'>Job not found.</div>");
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CONTENT_TYPE, MediaType.TEXT_HTML_VALUE)
+                .header("HX-Trigger", "jobq-refresh")
+                .body(body);
     }
 
     private String getBadgeClass(String status) {
@@ -374,15 +396,220 @@ public class JobQDashboardController {
             return """
                     <div class="mt-6 pt-6 border-t border-slate-800">
                         <button class="w-full px-4 py-3 bg-indigo-600 hover:bg-indigo-500 text-white font-semibold rounded-lg transition-colors flex items-center justify-center gap-2"
-                                hx-post="/jobq/htmx/job/%s/restart" hx-target="#modal-container" hx-swap="innerHTML">
+                                hx-post="/jobq/htmx/job/%s/retry" hx-target="#modal-container" hx-swap="innerHTML" hx-indicator="#jobq-loading-indicator">
                             <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path></svg>
-                            Restart Job
+                            Retry Job
                         </button>
                     </div>
                     """
                     .formatted(job.getId().toString());
         }
         return "";
+    }
+
+    private String rowRetryButtonHtml(String status, UUID id) {
+        if (!"FAILED".equals(status)) {
+            return "";
+        }
+        return """
+                <button class="px-2.5 py-1 rounded-md border border-rose-500/30 bg-rose-500/10 text-rose-300 text-xs font-semibold hover:bg-rose-500/20 transition-colors"
+                        hx-post="/jobq/htmx/job/%s/retry"
+                        hx-target="#modal-container"
+                        hx-swap="innerHTML"
+                        hx-indicator="#jobq-loading-indicator"
+                        hx-on:click="event.stopPropagation()">
+                    Retry
+                </button>
+                """
+                .formatted(id.toString());
+    }
+
+    private String formatFailedInfo(JobRepository.DashboardJobView job) {
+        return formatFailedInfo(job.getFailedAt(), job.getRetryCount(), job.getErrorMessage());
+    }
+
+    private String formatFailedInfo(OffsetDateTime failedAt, int retryCount, String errorMessage) {
+        if (failedAt == null) {
+            if (retryCount <= 0) {
+                return "<span class=\"text-slate-500\">—</span>";
+            }
+            return "<span class=\"text-amber-300\">Retries used: " + retryCount + "</span>";
+        }
+        String failedAtText = failedAt.format(FORMATTER);
+        if (errorMessage == null || errorMessage.isBlank()) {
+            return "<div class=\"text-rose-300\">Failed at " + failedAtText + "</div>";
+        }
+        String escapedError = escapeHtml(errorMessage);
+        String shortened = escapeHtml(shorten(errorMessage, 120));
+        return """
+                <div class="space-y-1">
+                    <div class="text-rose-300">Failed at %s</div>
+                    <div class="text-rose-200/90 text-xs leading-5 break-words" title="%s">%s</div>
+                </div>
+                """
+                .formatted(failedAtText, escapedError, shortened);
+    }
+
+    private Slice<JobRepository.DashboardJobView> loadDashboardJobsSlice(
+            String normalizedStatus,
+            int page,
+            int size,
+            String normalizedQuery,
+            String normalizedSort,
+            boolean scheduledOnly,
+            boolean retriedOnly) {
+        PageRequest pageRequest = PageRequest.of(page, size, resolveSort(normalizedSort));
+        UUID queriedJobId = parseUuid(normalizedQuery);
+        boolean jobIdProvided = queriedJobId != null;
+        return jobRepository.findDashboardJobViews(
+                normalizedStatus,
+                normalizedQuery,
+                scheduledOnly,
+                retriedOnly,
+                jobIdProvided,
+                jobIdProvided ? queriedJobId : ZERO_UUID,
+                pageRequest);
+    }
+
+    private String formatTimeline(JobRepository.DashboardJobView job, String statusLabel, OffsetDateTime now) {
+        OffsetDateTime createdAt = job.getCreatedAt();
+        String createdAtText = createdAt != null ? createdAt.format(FORMATTER) : "—";
+
+        if ("PENDING".equals(statusLabel) && job.getRunAt() != null && job.getRunAt().isAfter(now)) {
+            return """
+                    <div class="space-y-1">
+                        <div>Created %s</div>
+                        <div class="text-indigo-300 text-xs">Runs %s</div>
+                    </div>
+                    """.formatted(createdAtText, job.getRunAt().format(FORMATTER));
+        }
+
+        if ("PROCESSING".equals(statusLabel) && job.getProcessingStartedAt() != null) {
+            return """
+                    <div class="space-y-1">
+                        <div>Created %s</div>
+                        <div class="text-amber-300 text-xs">Started %s</div>
+                    </div>
+                    """.formatted(createdAtText, job.getProcessingStartedAt().format(FORMATTER));
+        }
+
+        if ("COMPLETED".equals(statusLabel) && job.getFinishedAt() != null) {
+            return """
+                    <div class="space-y-1">
+                        <div>Created %s</div>
+                        <div class="text-emerald-300 text-xs">Finished %s</div>
+                    </div>
+                    """.formatted(createdAtText, job.getFinishedAt().format(FORMATTER));
+        }
+
+        if ("FAILED".equals(statusLabel) && job.getFailedAt() != null) {
+            return """
+                    <div class="space-y-1">
+                        <div>Created %s</div>
+                        <div class="text-rose-300 text-xs">Failed %s</div>
+                    </div>
+                    """.formatted(createdAtText, job.getFailedAt().format(FORMATTER));
+        }
+
+        return createdAtText;
+    }
+
+    private String resolveStatus(JobRepository.DashboardJobView job) {
+        if (job.getFinishedAt() != null) {
+            return "COMPLETED";
+        }
+        if (job.getFailedAt() != null) {
+            return "FAILED";
+        }
+        if (job.getProcessingStartedAt() != null) {
+            return "PROCESSING";
+        }
+        return "PENDING";
+    }
+
+    private String renderPaginationControls(String normalizedStatus, int normalizedPage, boolean hasNext) {
+        int previousPage = Math.max(0, normalizedPage - 1);
+        int nextPage = normalizedPage + 1;
+        String escapedStatus = escapeJs(normalizedStatus);
+        return """
+                <div class="flex items-center gap-3 text-sm text-slate-400">
+                    <span>Page %d%s</span>
+                    <div class="flex gap-1">
+                        <button class="p-1.5 rounded bg-slate-800 border border-slate-700 hover:bg-slate-700 disabled:opacity-50 transition"
+                                %s
+                                hx-on:click="document.querySelectorAll('input[name=status]').forEach(e=>e.value='%s');document.querySelectorAll('select[name=statusFilter]').forEach(e=>e.value='%s');document.querySelectorAll('input[name=page]').forEach(e=>e.value='%d');htmx.trigger(document.body,'jobq-refresh')">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"></path></svg>
+                        </button>
+                        <button class="p-1.5 rounded bg-slate-800 border border-slate-700 hover:bg-slate-700 disabled:opacity-50 transition"
+                                %s
+                                hx-on:click="document.querySelectorAll('input[name=status]').forEach(e=>e.value='%s');document.querySelectorAll('select[name=statusFilter]').forEach(e=>e.value='%s');document.querySelectorAll('input[name=page]').forEach(e=>e.value='%d');htmx.trigger(document.body,'jobq-refresh')">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path></svg>
+                        </button>
+                    </div>
+                </div>
+                """
+                .formatted(
+                        normalizedPage + 1,
+                        hasNext ? "+" : "",
+                        normalizedPage == 0 ? "disabled" : "",
+                        escapedStatus,
+                        escapedStatus,
+                        previousPage,
+                        !hasNext ? "disabled" : "",
+                        escapedStatus,
+                        escapedStatus,
+                        nextPage);
+    }
+
+    private String normalizeQuery(String rawQuery) {
+        if (rawQuery == null) {
+            return "";
+        }
+        String normalized = rawQuery.trim();
+        if (normalized.length() > MAX_QUERY_LENGTH) {
+            normalized = normalized.substring(0, MAX_QUERY_LENGTH);
+        }
+        return normalized;
+    }
+
+    private String normalizeSort(String rawSort) {
+        if (rawSort == null) {
+            return "created-desc";
+        }
+        return switch (rawSort) {
+            case "created-asc", "priority-desc", "priority-asc", "retry-desc", "type-asc", "type-desc",
+                    "failed-desc", "run-at-asc", "run-at-desc" -> rawSort;
+            default -> "created-desc";
+        };
+    }
+
+    private Sort resolveSort(String normalizedSort) {
+        return switch (normalizedSort) {
+            case "created-asc" -> Sort.by(Sort.Order.asc("createdAt"), Sort.Order.asc("id"));
+            case "priority-desc" -> Sort.by(Sort.Order.desc("priority"), Sort.Order.desc("createdAt"));
+            case "priority-asc" -> Sort.by(Sort.Order.asc("priority"), Sort.Order.desc("createdAt"));
+            case "retry-desc" -> Sort.by(Sort.Order.desc("retryCount"), Sort.Order.desc("createdAt"));
+            case "type-asc" -> Sort.by(Sort.Order.asc("type"), Sort.Order.desc("createdAt"));
+            case "type-desc" -> Sort.by(Sort.Order.desc("type"), Sort.Order.desc("createdAt"));
+            case "failed-desc" -> Sort.by(
+                    Sort.Order.desc("failedAt").nullsLast(),
+                    Sort.Order.desc("createdAt"),
+                    Sort.Order.desc("id"));
+            case "run-at-asc" -> Sort.by(Sort.Order.asc("runAt"), Sort.Order.desc("createdAt"), Sort.Order.asc("id"));
+            case "run-at-desc" -> Sort.by(Sort.Order.desc("runAt"), Sort.Order.desc("createdAt"), Sort.Order.desc("id"));
+            default -> Sort.by(Sort.Order.desc("createdAt"), Sort.Order.desc("id"));
+        };
+    }
+
+    private UUID parseUuid(String value) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        try {
+            return UUID.fromString(value.trim());
+        } catch (IllegalArgumentException ex) {
+            return null;
+        }
     }
 
     private String normalizeStatus(String rawStatus) {
@@ -397,5 +624,19 @@ public class JobQDashboardController {
 
     private long countOrZero(Long value) {
         return value == null ? 0L : value;
+    }
+
+    private String escapeJs(String input) {
+        if (input == null) {
+            return "";
+        }
+        return input.replace("\\", "\\\\").replace("'", "\\'");
+    }
+
+    private String shorten(String input, int maxLength) {
+        if (input == null || input.length() <= maxLength) {
+            return input;
+        }
+        return input.substring(0, Math.max(0, maxLength - 3)) + "...";
     }
 }

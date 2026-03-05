@@ -33,6 +33,80 @@ public interface JobRepository extends JpaRepository<Job, UUID> {
         Long getFailedCount();
     }
 
+    /**
+     * Lightweight projection used by the dashboard list to avoid loading large payload JSON.
+     */
+    interface DashboardJobView {
+        UUID getId();
+
+        String getType();
+
+        OffsetDateTime getCreatedAt();
+
+        OffsetDateTime getRunAt();
+
+        int getRetryCount();
+
+        int getMaxRetries();
+
+        int getPriority();
+
+        String getGroupId();
+
+        String getReplaceKey();
+
+        OffsetDateTime getProcessingStartedAt();
+
+        OffsetDateTime getFinishedAt();
+
+        OffsetDateTime getFailedAt();
+
+        String getErrorMessage();
+    }
+
+    @Query("""
+            SELECT
+              j.id AS id,
+              j.type AS type,
+              j.createdAt AS createdAt,
+              j.runAt AS runAt,
+              j.retryCount AS retryCount,
+              j.maxRetries AS maxRetries,
+              j.priority AS priority,
+              j.groupId AS groupId,
+              j.replaceKey AS replaceKey,
+              j.processingStartedAt AS processingStartedAt,
+              j.finishedAt AS finishedAt,
+              j.failedAt AS failedAt,
+              j.errorMessage AS errorMessage
+            FROM Job j
+            WHERE (
+              (:status = 'PENDING' AND j.processingStartedAt IS NULL AND j.finishedAt IS NULL AND j.failedAt IS NULL)
+              OR (:status = 'PROCESSING' AND j.processingStartedAt IS NOT NULL AND j.finishedAt IS NULL AND j.failedAt IS NULL)
+              OR (:status = 'COMPLETED' AND j.finishedAt IS NOT NULL)
+              OR (:status = 'FAILED' AND j.failedAt IS NOT NULL)
+              OR (:status = '')
+            )
+              AND (:scheduledOnly = false OR j.runAt > CURRENT_TIMESTAMP)
+              AND (:retriedOnly = false OR j.retryCount > 0)
+              AND (
+                :query = ''
+                OR LOWER(j.type) LIKE LOWER(CONCAT('%', :query, '%'))
+                OR LOWER(COALESCE(j.groupId, '')) LIKE LOWER(CONCAT('%', :query, '%'))
+                OR LOWER(COALESCE(j.replaceKey, '')) LIKE LOWER(CONCAT('%', :query, '%'))
+                OR (:jobIdProvided = true AND j.id = :jobId)
+              )
+            """)
+    @QueryHints(@QueryHint(name = "org.hibernate.readOnly", value = "true"))
+    Slice<DashboardJobView> findDashboardJobViews(
+            @Param("status") String status,
+            @Param("query") String query,
+            @Param("scheduledOnly") boolean scheduledOnly,
+            @Param("retriedOnly") boolean retriedOnly,
+            @Param("jobIdProvided") boolean jobIdProvided,
+            @Param("jobId") UUID jobId,
+            Pageable pageable);
+
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @QueryHints({ @QueryHint(name = "jakarta.persistence.lock.timeout", value = "-2") }) // SKIP LOCKED
     @Query("""
@@ -56,6 +130,29 @@ public interface JobRepository extends JpaRepository<Job, UUID> {
     Slice<Job> findPendingJobs(Pageable pageable);
 
     @Query("""
+            SELECT
+              j.id AS id,
+              j.type AS type,
+              j.createdAt AS createdAt,
+              j.runAt AS runAt,
+              j.retryCount AS retryCount,
+              j.maxRetries AS maxRetries,
+              j.priority AS priority,
+              j.groupId AS groupId,
+              j.replaceKey AS replaceKey,
+              j.processingStartedAt AS processingStartedAt,
+              j.finishedAt AS finishedAt,
+              j.failedAt AS failedAt,
+              j.errorMessage AS errorMessage
+            FROM Job j
+            WHERE j.processingStartedAt IS NULL
+              AND j.finishedAt IS NULL
+              AND j.failedAt IS NULL
+            """)
+    @QueryHints(@QueryHint(name = "org.hibernate.readOnly", value = "true"))
+    Slice<DashboardJobView> findPendingJobViews(Pageable pageable);
+
+    @Query("""
             SELECT j FROM Job j
             WHERE j.processingStartedAt IS NOT NULL
               AND j.finishedAt IS NULL
@@ -64,17 +161,102 @@ public interface JobRepository extends JpaRepository<Job, UUID> {
     @QueryHints(@QueryHint(name = "org.hibernate.readOnly", value = "true"))
     Slice<Job> findProcessingJobs(Pageable pageable);
 
+    @Query("""
+            SELECT
+              j.id AS id,
+              j.type AS type,
+              j.createdAt AS createdAt,
+              j.runAt AS runAt,
+              j.retryCount AS retryCount,
+              j.maxRetries AS maxRetries,
+              j.priority AS priority,
+              j.groupId AS groupId,
+              j.replaceKey AS replaceKey,
+              j.processingStartedAt AS processingStartedAt,
+              j.finishedAt AS finishedAt,
+              j.failedAt AS failedAt,
+              j.errorMessage AS errorMessage
+            FROM Job j
+            WHERE j.processingStartedAt IS NOT NULL
+              AND j.finishedAt IS NULL
+              AND j.failedAt IS NULL
+            """)
+    @QueryHints(@QueryHint(name = "org.hibernate.readOnly", value = "true"))
+    Slice<DashboardJobView> findProcessingJobViews(Pageable pageable);
+
     @Query("SELECT j FROM Job j WHERE j.finishedAt IS NOT NULL")
     @QueryHints(@QueryHint(name = "org.hibernate.readOnly", value = "true"))
     Slice<Job> findCompletedJobs(Pageable pageable);
+
+    @Query("""
+            SELECT
+              j.id AS id,
+              j.type AS type,
+              j.createdAt AS createdAt,
+              j.runAt AS runAt,
+              j.retryCount AS retryCount,
+              j.maxRetries AS maxRetries,
+              j.priority AS priority,
+              j.groupId AS groupId,
+              j.replaceKey AS replaceKey,
+              j.processingStartedAt AS processingStartedAt,
+              j.finishedAt AS finishedAt,
+              j.failedAt AS failedAt,
+              j.errorMessage AS errorMessage
+            FROM Job j
+            WHERE j.finishedAt IS NOT NULL
+            """)
+    @QueryHints(@QueryHint(name = "org.hibernate.readOnly", value = "true"))
+    Slice<DashboardJobView> findCompletedJobViews(Pageable pageable);
 
     @Query("SELECT j FROM Job j WHERE j.failedAt IS NOT NULL")
     @QueryHints(@QueryHint(name = "org.hibernate.readOnly", value = "true"))
     Slice<Job> findFailedJobs(Pageable pageable);
 
+    @Query("""
+            SELECT
+              j.id AS id,
+              j.type AS type,
+              j.createdAt AS createdAt,
+              j.runAt AS runAt,
+              j.retryCount AS retryCount,
+              j.maxRetries AS maxRetries,
+              j.priority AS priority,
+              j.groupId AS groupId,
+              j.replaceKey AS replaceKey,
+              j.processingStartedAt AS processingStartedAt,
+              j.finishedAt AS finishedAt,
+              j.failedAt AS failedAt,
+              j.errorMessage AS errorMessage
+            FROM Job j
+            WHERE j.failedAt IS NOT NULL
+            """)
+    @QueryHints(@QueryHint(name = "org.hibernate.readOnly", value = "true"))
+    Slice<DashboardJobView> findFailedJobViews(Pageable pageable);
+
     @Query("SELECT j FROM Job j")
     @QueryHints(@QueryHint(name = "org.hibernate.readOnly", value = "true"))
     Slice<Job> findAllJobs(Pageable pageable);
+
+    @Query("""
+            SELECT
+              j.id AS id,
+              j.type AS type,
+              j.createdAt AS createdAt,
+              j.runAt AS runAt,
+              j.retryCount AS retryCount,
+              j.maxRetries AS maxRetries,
+              j.priority AS priority,
+              j.groupId AS groupId,
+              j.replaceKey AS replaceKey,
+              j.processingStartedAt AS processingStartedAt,
+              j.finishedAt AS finishedAt,
+              j.failedAt AS failedAt,
+              j.errorMessage AS errorMessage
+            FROM Job j
+            """)
+    @QueryHints(@QueryHint(name = "org.hibernate.readOnly", value = "true"))
+    Slice<DashboardJobView> findAllJobViews(Pageable pageable);
 
     @Query("""
             SELECT COUNT(j) FROM Job j

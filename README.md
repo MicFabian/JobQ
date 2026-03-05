@@ -18,7 +18,8 @@ It is designed for teams that want transactional job enqueueing, high concurrenc
 - Optional `onSuccess(...)` / `after(...)` hook per job
 - Explicit schedule-at enqueue APIs (`enqueueAt(..., Instant/OffsetDateTime)`)
 - Job grouping (`groupId`) and deduplication (`replaceKey`)
-- Built-in HTMX dashboard (status, payload inspection, restart failed jobs)
+- Built-in HTMX dashboard (status, payload inspection, retry actions, failed/retry insights)
+- Dashboard filters and sorting (status/search/scheduled-only/retried-only/page-size/run-time sorting)
 - Dashboard/metrics lifecycle counters fetched via single aggregated query
 - Built-in Micrometer gauges
 - Automatic retention cleanup for completed/failed jobs
@@ -315,8 +316,17 @@ Features:
 
 - live stats
 - paged job listing
+- text search filter (job type/group/replace key/full UUID)
+- status dropdown + stat-card status filtering
+- sorting options (newest/oldest/run-time/priority/retries/type/failed time)
+- scheduled-only and retried-only filters with adjustable page size
+- manual refresh, clear filters, and auto-refresh toggle
+- failure information (failed time + error summary) in list view
+- quick retry button for failed jobs directly in the list
 - payload/details view
-- restart failed jobs
+- retry failed jobs from list and details panel
+- optimized list rendering: projection-only reads (payload JSON not loaded for table rows)
+- reduced polling overhead: hidden-tab polling is skipped, pagination updates piggyback on jobs refresh
 
 ### Dashboard Security (Never Open)
 

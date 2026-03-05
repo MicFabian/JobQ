@@ -6,7 +6,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>JobQ Platform Dashboard</title>
     <!-- HTMX -->
-    <script src="https://unpkg.com/htmx.org@1.9.11"></script>
+    <script src="https://unpkg.com/htmx.org@2.0.4"></script>
     <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
@@ -21,6 +21,79 @@
                 }
             }
         }
+
+        function jobqSetPage(page) {
+            const pageInput = document.querySelector('input[name=page]');
+            if (pageInput) {
+                pageInput.value = String(Math.max(0, page));
+            }
+        }
+
+        function jobqMovePage(delta) {
+            const pageInput = document.querySelector('input[name=page]');
+            const current = pageInput ? (parseInt(pageInput.value || '0', 10) || 0) : 0;
+            const next = Math.max(0, current + delta);
+            if (next === current) {
+                return;
+            }
+            jobqSetPage(next);
+            htmx.trigger(document.body, 'jobq-refresh');
+        }
+
+        function jobqRefresh(resetPage) {
+            if (resetPage) {
+                jobqSetPage(0);
+            }
+            htmx.trigger(document.body, 'jobq-refresh');
+        }
+
+        function jobqClearFilters() {
+            const search = document.querySelector('input[name=query]');
+            const statusFilter = document.querySelector('select[name=statusFilter]');
+            const sort = document.querySelector('select[name=sort]');
+            const scheduledOnly = document.querySelector('input[name=scheduledOnly]');
+            const retriedOnly = document.querySelector('input[name=retriedOnly]');
+            const size = document.querySelector('select[name=size]');
+            const status = document.querySelector('input[name=status]');
+            if (search) search.value = '';
+            if (statusFilter) statusFilter.value = '';
+            if (sort) sort.value = 'created-desc';
+            if (scheduledOnly) scheduledOnly.checked = false;
+            if (retriedOnly) retriedOnly.checked = false;
+            if (size) size.value = '50';
+            if (status) status.value = '';
+            jobqRefresh(true);
+        }
+
+        let jobqSearchDebounceHandle;
+        function jobqHandleSearchInput() {
+            clearTimeout(jobqSearchDebounceHandle);
+            jobqSearchDebounceHandle = setTimeout(() => jobqRefresh(true), 300);
+        }
+
+        document.addEventListener('jobqPagination', (event) => {
+            const detail = event && event.detail ? event.detail : {};
+            const page = Number.isFinite(detail.page) ? detail.page : (parseInt(detail.page || '0', 10) || 0);
+            const hasNext = typeof detail.hasNext === 'boolean'
+                ? detail.hasNext
+                : String(detail.hasNext).toLowerCase() === 'true';
+
+            jobqSetPage(page);
+
+            const label = document.getElementById('jobq-page-label');
+            if (label) {
+                label.textContent = `Page ${page + 1}${hasNext ? '+' : ''}`;
+            }
+
+            const prevButton = document.getElementById('jobq-page-prev');
+            const nextButton = document.getElementById('jobq-page-next');
+            if (prevButton) {
+                prevButton.disabled = page <= 0;
+            }
+            if (nextButton) {
+                nextButton.disabled = !hasNext;
+            }
+        });
     </script>
     <!-- Google Fonts -->
     <link
@@ -60,8 +133,17 @@
             display: none;
         }
 
-        .htmx-request .htmx-indicator {
+        .htmx-request .htmx-indicator,
+        .htmx-indicator.htmx-request {
             display: inline-block;
+        }
+
+        .htmx-indicator-overlay {
+            display: none;
+        }
+
+        .htmx-indicator-overlay.htmx-request {
+            display: flex;
         }
     </style>
 </head>
@@ -96,7 +178,7 @@
                 </span>
                 <span class="text-xs text-slate-300 tracking-wide">Live Polling</span>
                 <!-- Loading Indicator -->
-                <svg class="htmx-indicator w-3 h-3 text-indigo-400 animate-spin ml-1" fill="none" stroke="currentColor"
+                <svg id="jobq-header-indicator" class="htmx-indicator w-3 h-3 text-indigo-400 animate-spin ml-1" fill="none" stroke="currentColor"
                     viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
                         d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15">
@@ -110,10 +192,93 @@
     <main class="flex-grow p-6 md:px-10 lg:py-8 max-w-7xl mx-auto w-full relative z-10">
 
         <input type="hidden" name="status" value="">
+        <input type="hidden" name="page" value="0">
 
         <!-- Stats Container (Auto-refreshes every 5s) -->
-        <div id="stats-container" hx-get="/jobq/htmx/stats" hx-trigger="every 5s, load" hx-include="[name='status']">
+        <div id="stats-container" hx-get="/jobq/htmx/stats"
+            hx-trigger="load, jobq-refresh from:body, every 5s [!document.hidden && document.getElementById('jobq-auto-refresh') && document.getElementById('jobq-auto-refresh').checked]"
+            hx-include="[name='status']" hx-indicator="#jobq-header-indicator,#jobq-loading-indicator">
             <!-- Rendered by Server -->
+        </div>
+
+        <div class="glass-panel rounded-xl px-4 py-3 mb-4 border border-slate-800/70">
+            <div class="grid grid-cols-1 lg:grid-cols-12 gap-3 items-end">
+                <div class="lg:col-span-3">
+                    <label class="block text-[11px] uppercase tracking-wider text-slate-500 mb-1">Search</label>
+                    <input type="text" name="query" placeholder="Type, group, key or full UUID"
+                        class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500/60"
+                        oninput="jobqHandleSearchInput()" onkeydown="if(event.key==='Enter'){event.preventDefault();jobqRefresh(true)}">
+                </div>
+                <div class="lg:col-span-2">
+                    <label class="block text-[11px] uppercase tracking-wider text-slate-500 mb-1">Status</label>
+                    <select name="statusFilter"
+                        class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500/60"
+                        onchange="document.querySelectorAll('input[name=status]').forEach(e=>e.value=this.value);jobqRefresh(true)">
+                        <option value="">All</option>
+                        <option value="PENDING">Pending</option>
+                        <option value="PROCESSING">Processing</option>
+                        <option value="COMPLETED">Completed</option>
+                        <option value="FAILED">Failed</option>
+                    </select>
+                </div>
+                <div class="lg:col-span-1">
+                    <label class="block text-[11px] uppercase tracking-wider text-slate-500 mb-1">Sort</label>
+                    <select name="sort"
+                        class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500/60"
+                        onchange="jobqRefresh(true)">
+                        <option value="created-desc">Newest</option>
+                        <option value="created-asc">Oldest</option>
+                        <option value="run-at-asc">Run time soonest</option>
+                        <option value="run-at-desc">Run time latest</option>
+                        <option value="priority-desc">Priority high</option>
+                        <option value="priority-asc">Priority low</option>
+                        <option value="retry-desc">Most retries</option>
+                        <option value="failed-desc">Latest failed</option>
+                        <option value="type-asc">Type A-Z</option>
+                        <option value="type-desc">Type Z-A</option>
+                    </select>
+                </div>
+                <div class="lg:col-span-1">
+                    <label class="block text-[11px] uppercase tracking-wider text-slate-500 mb-1">Page Size</label>
+                    <select name="size"
+                        class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500/60"
+                        onchange="jobqRefresh(true)">
+                        <option value="25">25</option>
+                        <option value="50" selected>50</option>
+                        <option value="100">100</option>
+                        <option value="200">200</option>
+                    </select>
+                </div>
+                <div class="lg:col-span-2 flex items-center gap-4 pb-2">
+                    <label class="inline-flex items-center gap-2 text-sm text-slate-300 cursor-pointer">
+                        <input type="checkbox" name="scheduledOnly" value="true" class="rounded border-slate-600 bg-slate-900 text-indigo-500"
+                            onchange="jobqRefresh(true)">
+                        <span>Scheduled only</span>
+                    </label>
+                    <label class="inline-flex items-center gap-2 text-sm text-slate-300 cursor-pointer">
+                        <input type="checkbox" name="retriedOnly" value="true" class="rounded border-slate-600 bg-slate-900 text-indigo-500"
+                            onchange="jobqRefresh(true)">
+                        <span>Retried only</span>
+                    </label>
+                    <label class="inline-flex items-center gap-2 text-sm text-slate-300 cursor-pointer">
+                        <input id="jobq-auto-refresh" type="checkbox" checked class="rounded border-slate-600 bg-slate-900 text-indigo-500"
+                            onchange="if(this.checked){jobqRefresh(false)}">
+                        <span>Auto</span>
+                    </label>
+                </div>
+                <div class="lg:col-span-2 flex items-center justify-end gap-2">
+                    <button type="button"
+                        class="px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-slate-200 text-sm hover:bg-slate-700 transition"
+                        onclick="jobqRefresh(false)">
+                        Refresh
+                    </button>
+                    <button type="button"
+                        class="px-3 py-2 rounded-lg bg-indigo-600/90 border border-indigo-500/60 text-white text-sm hover:bg-indigo-500 transition"
+                        onclick="jobqClearFilters()">
+                        Clear
+                    </button>
+                </div>
+            </div>
         </div>
 
         <!-- Jobs List Section -->
@@ -122,8 +287,24 @@
             <div
                 class="px-6 py-4 border-b border-slate-800/60 bg-slate-900/40 flex justify-between items-center backdrop-blur-md">
                 <h2 class="font-semibold text-lg text-slate-100 tracking-tight">Job Execution Log</h2>
-                <div id="pagination-controls">
-                    <!-- Rendered by Server OOB -->
+                <div id="pagination-controls" class="flex items-center gap-3 text-sm text-slate-400">
+                    <span id="jobq-page-label">Page 1</span>
+                    <div class="flex gap-1">
+                        <button id="jobq-page-prev"
+                            class="p-1.5 rounded bg-slate-800 border border-slate-700 hover:bg-slate-700 disabled:opacity-50 transition"
+                            type="button"
+                            onclick="jobqMovePage(-1)"
+                            disabled>
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"></path></svg>
+                        </button>
+                        <button id="jobq-page-next"
+                            class="p-1.5 rounded bg-slate-800 border border-slate-700 hover:bg-slate-700 disabled:opacity-50 transition"
+                            type="button"
+                            onclick="jobqMovePage(1)"
+                            disabled>
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path></svg>
+                        </button>
+                    </div>
                 </div>
             </div>
 
@@ -139,12 +320,16 @@
                             <th class="px-6 py-4 font-semibold">Group</th>
                             <th class="px-6 py-4 font-semibold">Key</th>
                             <th class="px-6 py-4 font-semibold">Timeline</th>
+                            <th class="px-6 py-4 font-semibold">Failure</th>
                             <th class="px-6 py-4 font-semibold">Tracking ID</th>
                             <th class="px-6 py-4 font-semibold text-right">Inspect</th>
                         </tr>
                     </thead>
                     <tbody id="jobs-container" class="divide-y divide-slate-800/50" hx-get="/jobq/htmx/jobs"
-                        hx-trigger="every 5s, load" hx-include="[name='status']">
+                        hx-trigger="load, jobq-refresh from:body, every 5s [!document.hidden && document.getElementById('jobq-auto-refresh') && document.getElementById('jobq-auto-refresh').checked]"
+                        hx-swap="innerHTML"
+                        hx-include="[name='status'], [name='page'], [name='size'], [name='query'], [name='sort'], [name='scheduledOnly'], [name='retriedOnly']"
+                        hx-indicator="#jobq-header-indicator,#jobq-loading-indicator">
                         <!-- Rows rendered by Server -->
                     </tbody>
                 </table>
@@ -161,6 +346,18 @@
     </div>
     <div
         class="fixed bottom-[-20%] right-[-10%] w-[50%] h-[50%] rounded-full bg-blue-900/20 blur-[120px] pointer-events-none z-0">
+    </div>
+
+    <div id="jobq-loading-indicator"
+        class="htmx-indicator htmx-indicator-overlay fixed inset-0 z-[60] items-center justify-center bg-slate-950/45 backdrop-blur-sm pointer-events-none">
+        <div class="flex items-center gap-3 rounded-lg border border-indigo-400/30 bg-slate-900/85 px-4 py-3 text-sm text-slate-100 shadow-2xl">
+            <svg class="w-5 h-5 text-indigo-400 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                    d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15">
+                </path>
+            </svg>
+            <span>Loading dashboard data...</span>
+        </div>
     </div>
 </body>
 
