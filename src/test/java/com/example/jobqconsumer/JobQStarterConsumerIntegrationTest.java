@@ -7,8 +7,6 @@ import jakarta.persistence.EntityManagerFactory;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
-import org.springframework.boot.persistence.autoconfigure.EntityScan;
-import org.springframework.data.jpa.repository.config.EnableJpaRepositories;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
@@ -89,8 +87,6 @@ class JobQStarterConsumerIntegrationTest {
     }
 
     @SpringBootApplication(scanBasePackages = "com.example.jobqconsumer")
-    @EntityScan(basePackageClasses = ConsumerNote.class)
-    @EnableJpaRepositories(basePackageClasses = ConsumerNoteRepository.class)
     static class ConsumerApplication {
     }
 }

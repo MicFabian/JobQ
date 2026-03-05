@@ -3,7 +3,6 @@ package com.jobq;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import com.jobq.config.JobQProperties;
-import jakarta.persistence.EntityManager;
 import org.hibernate.boot.model.naming.Identifier;
 import org.hibernate.boot.model.naming.PhysicalNamingStrategySnakeCaseImpl;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
@@ -14,11 +13,9 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.ComponentScan;
 import org.springframework.context.annotation.Import;
-import org.springframework.data.jpa.repository.support.JpaRepositoryFactoryBean;
 import org.springframework.scheduling.annotation.EnableScheduling;
 
 import java.util.Locale;
-import java.util.UUID;
 
 @AutoConfiguration
 @AutoConfigurationPackage
@@ -57,15 +54,6 @@ public class JobQAutoConfiguration {
                         });
             }
         };
-    }
-
-    @Bean
-    @ConditionalOnMissingBean(JobRepository.class)
-    public JpaRepositoryFactoryBean<JobRepository, Job, UUID> jobqRepositoryFactoryBean(EntityManager entityManager) {
-        JpaRepositoryFactoryBean<JobRepository, Job, UUID> factoryBean = new JpaRepositoryFactoryBean<>(
-                JobRepository.class);
-        factoryBean.setEntityManager(entityManager);
-        return factoryBean;
     }
 
 }
