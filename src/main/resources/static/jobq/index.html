@@ -177,13 +177,6 @@
                     <span class="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500"></span>
                 </span>
                 <span class="text-xs text-slate-300 tracking-wide">Live Polling</span>
-                <!-- Loading Indicator -->
-                <svg id="jobq-header-indicator" class="htmx-indicator w-3 h-3 text-indigo-400 animate-spin ml-1" fill="none" stroke="currentColor"
-                    viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-                        d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15">
-                    </path>
-                </svg>
             </div>
         </div>
     </header>
@@ -197,19 +190,19 @@
         <!-- Stats Container (Auto-refreshes every 5s) -->
         <div id="stats-container" hx-get="/jobq/htmx/stats"
             hx-trigger="load, jobq-refresh from:body, every 5s [!document.hidden && document.getElementById('jobq-auto-refresh') && document.getElementById('jobq-auto-refresh').checked]"
-            hx-include="[name='status']" hx-indicator="#jobq-header-indicator,#jobq-loading-indicator">
+            hx-include="[name='status']">
             <!-- Rendered by Server -->
         </div>
 
-        <div class="glass-panel rounded-xl px-4 py-3 mb-4 border border-slate-800/70">
-            <div class="grid grid-cols-1 lg:grid-cols-12 gap-3 items-end">
-                <div class="lg:col-span-3">
+        <div class="glass-panel rounded-xl px-4 py-4 mb-4 border border-slate-800/70">
+            <div class="flex flex-wrap items-end gap-3">
+                <div class="min-w-[16rem] flex-1 lg:min-w-[20rem]">
                     <label class="block text-[11px] uppercase tracking-wider text-slate-500 mb-1">Search</label>
                     <input type="text" name="query" placeholder="Type, group, key or full UUID"
                         class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500/60"
                         oninput="jobqHandleSearchInput()" onkeydown="if(event.key==='Enter'){event.preventDefault();jobqRefresh(true)}">
                 </div>
-                <div class="lg:col-span-2">
+                <div class="w-full sm:w-44">
                     <label class="block text-[11px] uppercase tracking-wider text-slate-500 mb-1">Status</label>
                     <select name="statusFilter"
                         class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500/60"
@@ -221,7 +214,7 @@
                         <option value="FAILED">Failed</option>
                     </select>
                 </div>
-                <div class="lg:col-span-1">
+                <div class="w-full sm:w-44">
                     <label class="block text-[11px] uppercase tracking-wider text-slate-500 mb-1">Sort</label>
                     <select name="sort"
                         class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500/60"
@@ -238,7 +231,7 @@
                         <option value="type-desc">Type Z-A</option>
                     </select>
                 </div>
-                <div class="lg:col-span-1">
+                <div class="w-full sm:w-28">
                     <label class="block text-[11px] uppercase tracking-wider text-slate-500 mb-1">Page Size</label>
                     <select name="size"
                         class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500/60"
@@ -249,24 +242,24 @@
                         <option value="200">200</option>
                     </select>
                 </div>
-                <div class="lg:col-span-2 flex items-center gap-4 pb-2">
-                    <label class="inline-flex items-center gap-2 text-sm text-slate-300 cursor-pointer">
+                <div class="flex flex-wrap items-center gap-x-5 gap-y-2 px-3 py-2 rounded-lg bg-slate-900/40 border border-slate-800">
+                    <label class="inline-flex items-center gap-2 text-sm text-slate-300 cursor-pointer whitespace-nowrap">
                         <input type="checkbox" name="scheduledOnly" value="true" class="rounded border-slate-600 bg-slate-900 text-indigo-500"
                             onchange="jobqRefresh(true)">
                         <span>Scheduled only</span>
                     </label>
-                    <label class="inline-flex items-center gap-2 text-sm text-slate-300 cursor-pointer">
+                    <label class="inline-flex items-center gap-2 text-sm text-slate-300 cursor-pointer whitespace-nowrap">
                         <input type="checkbox" name="retriedOnly" value="true" class="rounded border-slate-600 bg-slate-900 text-indigo-500"
                             onchange="jobqRefresh(true)">
                         <span>Retried only</span>
                     </label>
-                    <label class="inline-flex items-center gap-2 text-sm text-slate-300 cursor-pointer">
+                    <label class="inline-flex items-center gap-2 text-sm text-slate-300 cursor-pointer whitespace-nowrap">
                         <input id="jobq-auto-refresh" type="checkbox" checked class="rounded border-slate-600 bg-slate-900 text-indigo-500"
                             onchange="if(this.checked){jobqRefresh(false)}">
-                        <span>Auto</span>
+                        <span>Auto refresh</span>
                     </label>
                 </div>
-                <div class="lg:col-span-2 flex items-center justify-end gap-2">
+                <div class="flex items-center gap-2 lg:ml-auto">
                     <button type="button"
                         class="px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-slate-200 text-sm hover:bg-slate-700 transition"
                         onclick="jobqRefresh(false)">
@@ -328,8 +321,7 @@
                     <tbody id="jobs-container" class="divide-y divide-slate-800/50" hx-get="/jobq/htmx/jobs"
                         hx-trigger="load, jobq-refresh from:body, every 5s [!document.hidden && document.getElementById('jobq-auto-refresh') && document.getElementById('jobq-auto-refresh').checked]"
                         hx-swap="innerHTML"
-                        hx-include="[name='status'], [name='page'], [name='size'], [name='query'], [name='sort'], [name='scheduledOnly'], [name='retriedOnly']"
-                        hx-indicator="#jobq-header-indicator,#jobq-loading-indicator">
+                        hx-include="[name='status'], [name='page'], [name='size'], [name='query'], [name='sort'], [name='scheduledOnly'], [name='retriedOnly']">
                         <!-- Rows rendered by Server -->
                     </tbody>
                 </table>

@@ -146,6 +146,32 @@ class JobQHtmxControllerTest {
     }
 
     @Test
+    void shouldRenderRerunButtonForCompletedJobs() throws Exception {
+        JobRepository.DashboardJobView job = dashboardRow(
+                UUID.randomUUID(),
+                "com.example.CompletedJob",
+                OffsetDateTime.now().minusMinutes(15),
+                OffsetDateTime.now().minusMinutes(15),
+                0,
+                3,
+                0,
+                null,
+                null,
+                OffsetDateTime.now().minusMinutes(10),
+                OffsetDateTime.now().minusMinutes(1),
+                null,
+                null);
+
+        Page<JobRepository.DashboardJobView> jobPage = new PageImpl<>(List.of(job));
+        when(jobRepository.findDashboardJobViews(anyString(), anyString(), anyBoolean(), anyBoolean(), anyBoolean(), any(), any(Pageable.class)))
+                .thenReturn(jobPage);
+
+        mockMvc.perform(get("/jobq/htmx/jobs").param("status", "COMPLETED"))
+                .andExpect(status().isOk())
+                .andExpect(content().string(containsString("Rerun")));
+    }
+
+    @Test
     void shouldReturnHtmlForPaginationControls() throws Exception {
         when(jobRepository.findDashboardJobViews(anyString(), anyString(), anyBoolean(), anyBoolean(), anyBoolean(), any(), any(Pageable.class)))
                 .thenReturn(Page.empty());
@@ -343,6 +369,34 @@ class JobQHtmxControllerTest {
     }
 
     @Test
+    void shouldRerunCompletedJobFromEndpoint() throws Exception {
+        UUID jobId = UUID.randomUUID();
+        Job job = new Job();
+        job.setId(jobId);
+        job.setStatus("COMPLETED");
+        job.setRetryCount(1);
+        job.setErrorMessage("old");
+        job.setRunAt(OffsetDateTime.now().plusHours(1));
+
+        when(jobRepository.findById(eq(jobId))).thenReturn(Optional.of(job));
+        when(jobRepository.save(any(Job.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        mockMvc.perform(post("/jobq/htmx/job/" + jobId + "/rerun"))
+                .andExpect(status().isOk())
+                .andExpect(header().string("HX-Trigger", "jobq-refresh"))
+                .andExpect(content().string(containsString("queued for rerun")));
+
+        ArgumentCaptor<Job> captor = ArgumentCaptor.forClass(Job.class);
+        verify(jobRepository).save(captor.capture());
+        Job rerun = captor.getValue();
+
+        assertEquals("PENDING", rerun.getStatus());
+        assertEquals(0, rerun.getRetryCount());
+        assertNull(rerun.getErrorMessage());
+        assertNotNull(rerun.getRunAt());
+    }
+
+    @Test
     void shouldReturnNotFoundMessageWhenRestartTargetDoesNotExist() throws Exception {
         UUID missingId = UUID.randomUUID();
         when(jobRepository.findById(eq(missingId))).thenReturn(Optional.empty());
@@ -353,17 +407,17 @@ class JobQHtmxControllerTest {
     }
 
     @Test
-    void shouldRejectRestartForNonFailedJob() throws Exception {
+    void shouldRejectRerunForActiveJob() throws Exception {
         UUID jobId = UUID.randomUUID();
         Job job = new Job();
         job.setId(jobId);
-        job.setStatus("COMPLETED");
+        job.setStatus("PROCESSING");
 
         when(jobRepository.findById(eq(jobId))).thenReturn(Optional.of(job));
 
         mockMvc.perform(post("/jobq/htmx/job/" + jobId + "/restart"))
                 .andExpect(status().isOk())
-                .andExpect(content().string(containsString("cannot be retried")));
+                .andExpect(content().string(containsString("cannot be rerun")));
 
         verify(jobRepository, never()).save(any(Job.class));
     }

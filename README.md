@@ -324,7 +324,7 @@ Features:
 - failure information (failed time + error summary) in list view
 - quick retry button for failed jobs directly in the list
 - payload/details view
-- retry failed jobs from list and details panel
+- retry failed jobs and rerun completed jobs from list/details panel
 - optimized list rendering: projection-only reads (payload JSON not loaded for table rows)
 - reduced polling overhead: hidden-tab polling is skipped, pagination updates piggyback on jobs refresh
 

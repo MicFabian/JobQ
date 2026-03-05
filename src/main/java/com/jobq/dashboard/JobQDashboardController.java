@@ -131,7 +131,7 @@ public class JobQDashboardController {
                 String statusLabel = resolveStatus(job);
                 String timeline = formatTimeline(job, statusLabel, now);
                 String failedInfo = formatFailedInfo(job);
-                String rowRetryButton = rowRetryButtonHtml(statusLabel, job.getId());
+                String rowActionButton = rowActionButtonHtml(statusLabel, job.getId());
                 rows.append(
                         """
                                 <tr class="hover:bg-slate-800/50 transition-colors border-b border-slate-800/50 group cursor-pointer"
@@ -174,7 +174,7 @@ public class JobQDashboardController {
                                         timeline,
                                         failedInfo,
                                         job.getId().toString().substring(0, 8) + "...",
-                                        rowRetryButton));
+                                        rowActionButton));
             }
         }
         return ResponseEntity.ok()
@@ -331,13 +331,15 @@ public class JobQDashboardController {
         }).orElse("<div class='p-4 text-red-500'>Job not found.</div>");
     }
 
-    @PostMapping(value = { "/job/{id}/restart", "/job/{id}/retry" }, produces = MediaType.TEXT_HTML_VALUE)
-    public ResponseEntity<String> retryJob(@PathVariable("id") UUID id) {
+    @PostMapping(value = { "/job/{id}/restart", "/job/{id}/retry", "/job/{id}/rerun" }, produces = MediaType.TEXT_HTML_VALUE)
+    public ResponseEntity<String> rerunJob(@PathVariable("id") UUID id) {
         String body = jobRepository.findById(id).map(job -> {
-            if (job.getFailedAt() == null) {
+            boolean failed = job.getFailedAt() != null;
+            boolean completed = job.getFinishedAt() != null;
+            if (!failed && !completed) {
                 return """
                         <div class="p-4 text-center text-amber-300 font-semibold">
-                            Job %s is not in FAILED state and cannot be retried.
+                            Job %s is not in COMPLETED or FAILED state and cannot be rerun.
                         </div>
                         """.formatted(id.toString().substring(0, 8));
             }
@@ -354,9 +356,9 @@ public class JobQDashboardController {
             jobRepository.save(job);
             return """
                     <div class="p-4 text-center text-emerald-400 font-semibold">
-                        ✅ Job %s has been queued for retry. It will be picked up on the next poll cycle.
+                        ✅ Job %s has been queued for %s. It will be picked up on the next poll cycle.
                     </div>
-                    """.formatted(id.toString().substring(0, 8));
+                    """.formatted(id.toString().substring(0, 8), failed ? "retry" : "rerun");
         }).orElse("<div class='p-4 text-red-500'>Job not found.</div>");
         return ResponseEntity.ok()
                 .header(HttpHeaders.CONTENT_TYPE, MediaType.TEXT_HTML_VALUE)
@@ -396,9 +398,21 @@ public class JobQDashboardController {
             return """
                     <div class="mt-6 pt-6 border-t border-slate-800">
                         <button class="w-full px-4 py-3 bg-indigo-600 hover:bg-indigo-500 text-white font-semibold rounded-lg transition-colors flex items-center justify-center gap-2"
-                                hx-post="/jobq/htmx/job/%s/retry" hx-target="#modal-container" hx-swap="innerHTML" hx-indicator="#jobq-loading-indicator">
+                                hx-post="/jobq/htmx/job/%s/rerun" hx-target="#modal-container" hx-swap="innerHTML" hx-indicator="#jobq-loading-indicator">
                             <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path></svg>
                             Retry Job
+                        </button>
+                    </div>
+                    """
+                    .formatted(job.getId().toString());
+        }
+        if ("COMPLETED".equals(job.getStatus())) {
+            return """
+                    <div class="mt-6 pt-6 border-t border-slate-800">
+                        <button class="w-full px-4 py-3 bg-emerald-600 hover:bg-emerald-500 text-white font-semibold rounded-lg transition-colors flex items-center justify-center gap-2"
+                                hx-post="/jobq/htmx/job/%s/rerun" hx-target="#modal-container" hx-swap="innerHTML" hx-indicator="#jobq-loading-indicator">
+                            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path></svg>
+                            Rerun Job
                         </button>
                     </div>
                     """
@@ -407,21 +421,34 @@ public class JobQDashboardController {
         return "";
     }
 
-    private String rowRetryButtonHtml(String status, UUID id) {
-        if (!"FAILED".equals(status)) {
-            return "";
+    private String rowActionButtonHtml(String status, UUID id) {
+        if ("FAILED".equals(status)) {
+            return """
+                    <button class="px-2.5 py-1 rounded-md border border-rose-500/30 bg-rose-500/10 text-rose-300 text-xs font-semibold hover:bg-rose-500/20 transition-colors"
+                            hx-post="/jobq/htmx/job/%s/rerun"
+                            hx-target="#modal-container"
+                            hx-swap="innerHTML"
+                            hx-indicator="#jobq-loading-indicator"
+                            hx-on:click="event.stopPropagation()">
+                        Retry
+                    </button>
+                    """
+                    .formatted(id.toString());
         }
-        return """
-                <button class="px-2.5 py-1 rounded-md border border-rose-500/30 bg-rose-500/10 text-rose-300 text-xs font-semibold hover:bg-rose-500/20 transition-colors"
-                        hx-post="/jobq/htmx/job/%s/retry"
-                        hx-target="#modal-container"
-                        hx-swap="innerHTML"
-                        hx-indicator="#jobq-loading-indicator"
-                        hx-on:click="event.stopPropagation()">
-                    Retry
-                </button>
-                """
-                .formatted(id.toString());
+        if ("COMPLETED".equals(status)) {
+            return """
+                    <button class="px-2.5 py-1 rounded-md border border-emerald-500/30 bg-emerald-500/10 text-emerald-300 text-xs font-semibold hover:bg-emerald-500/20 transition-colors"
+                            hx-post="/jobq/htmx/job/%s/rerun"
+                            hx-target="#modal-container"
+                            hx-swap="innerHTML"
+                            hx-indicator="#jobq-loading-indicator"
+                            hx-on:click="event.stopPropagation()">
+                        Rerun
+                    </button>
+                    """
+                    .formatted(id.toString());
+        }
+        return "";
     }
 
     private String formatFailedInfo(JobRepository.DashboardJobView job) {

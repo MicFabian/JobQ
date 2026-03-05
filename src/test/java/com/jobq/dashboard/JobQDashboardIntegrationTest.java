@@ -199,13 +199,35 @@ class JobQDashboardIntegrationTest {
     }
 
     @Test
-    void shouldRejectRetryForNonFailedJob() throws Exception {
+    void shouldRerunCompletedJobAndResetCompletionFields() throws Exception {
+        Job completed = persistCompleted("daily-summary");
+        completed.setRunAt(OffsetDateTime.now().plusHours(2));
+        jobRepository.saveAndFlush(completed);
+
+        mockMvc.perform(post("/jobq/htmx/job/" + completed.getId() + "/rerun")
+                        .header("Authorization", basicAuthHeader()))
+                .andExpect(status().isOk())
+                .andExpect(header().string("HX-Trigger", "jobq-refresh"))
+                .andExpect(content().string(org.hamcrest.Matchers.containsString("queued for rerun")));
+
+        Job reloaded = jobRepository.findById(completed.getId()).orElseThrow();
+        assertNull(reloaded.getProcessingStartedAt());
+        assertNull(reloaded.getFinishedAt());
+        assertNull(reloaded.getFailedAt());
+        assertEquals(0, reloaded.getRetryCount());
+        assertNull(reloaded.getErrorMessage());
+        assertNotNull(reloaded.getRunAt());
+        assertNotNull(reloaded.getUpdatedAt());
+    }
+
+    @Test
+    void shouldRejectRerunForNonTerminalJob() throws Exception {
         Job pending = persistPending("non-failed", OffsetDateTime.now(), 0, null, null);
 
         mockMvc.perform(post("/jobq/htmx/job/" + pending.getId() + "/retry")
                         .header("Authorization", basicAuthHeader()))
                 .andExpect(status().isOk())
-                .andExpect(content().string(org.hamcrest.Matchers.containsString("cannot be retried")));
+                .andExpect(content().string(org.hamcrest.Matchers.containsString("cannot be rerun")));
 
         Job reloaded = jobRepository.findById(pending.getId()).orElseThrow();
         assertEquals("PENDING", reloaded.getStatus());
