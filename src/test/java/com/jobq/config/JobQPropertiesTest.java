@@ -1,24 +1,20 @@
 package com.jobq.config;
 
-import com.jobq.JobQAutoConfiguration;
-import org.junit.jupiter.api.Test;
-import org.springframework.boot.autoconfigure.AutoConfigurations;
-import org.springframework.boot.test.context.runner.ApplicationContextRunner;
-
 import static org.junit.jupiter.api.Assertions.*;
 
+import org.junit.jupiter.api.Test;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
+import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.context.annotation.Configuration;
 
 public class JobQPropertiesTest {
 
     @Configuration
     @EnableConfigurationProperties(JobQProperties.class)
-    static class Config {
-    }
+    static class Config {}
 
-    private final ApplicationContextRunner contextRunner = new ApplicationContextRunner()
-            .withUserConfiguration(Config.class);
+    private final ApplicationContextRunner contextRunner =
+            new ApplicationContextRunner().withUserConfiguration(Config.class);
 
     @Test
     void shouldMapDefaultJobqProperties() {
@@ -28,7 +24,9 @@ public class JobQPropertiesTest {
             assertTrue(properties.getBackgroundJobServer().getWorkerCount() >= 1);
             assertFalse(properties.getDashboard().isEnabled());
             assertEquals("/jobq/dashboard", properties.getDashboard().getPath());
-            assertEquals(JobQProperties.Dashboard.AuthMode.BASIC, properties.getDashboard().getAuthMode());
+            assertEquals(
+                    JobQProperties.Dashboard.AuthMode.BASIC,
+                    properties.getDashboard().getAuthMode());
             assertEquals("JOBQ_DASHBOARD", properties.getDashboard().getRequiredRole());
             assertFalse(properties.getDatabase().isSkipCreate());
             assertTrue(properties.getDatabase().isFailOnMigrationError());
@@ -53,7 +51,9 @@ public class JobQPropertiesTest {
                     assertEquals(5, properties.getBackgroundJobServer().getWorkerCount());
                     assertTrue(properties.getDashboard().isEnabled());
                     assertEquals("/custom/path", properties.getDashboard().getPath());
-                    assertEquals(JobQProperties.Dashboard.AuthMode.SPRING_SECURITY, properties.getDashboard().getAuthMode());
+                    assertEquals(
+                            JobQProperties.Dashboard.AuthMode.SPRING_SECURITY,
+                            properties.getDashboard().getAuthMode());
                     assertEquals("OPS_DASHBOARD", properties.getDashboard().getRequiredRole());
                     assertTrue(properties.getDatabase().isSkipCreate());
                     assertFalse(properties.getDatabase().isFailOnMigrationError());

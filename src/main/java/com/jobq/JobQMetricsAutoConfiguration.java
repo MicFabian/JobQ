@@ -13,7 +13,7 @@ import org.springframework.context.annotation.Bean;
 public class JobQMetricsAutoConfiguration {
 
     @Bean
-    @ConditionalOnBean({ JobRepository.class, MeterRegistry.class })
+    @ConditionalOnBean({JobRepository.class, MeterRegistry.class})
     @ConditionalOnMissingBean
     public JobQMetrics jobqMetrics(JobRepository jobRepository, MeterRegistry meterRegistry) {
         return new JobQMetrics(jobRepository, meterRegistry);

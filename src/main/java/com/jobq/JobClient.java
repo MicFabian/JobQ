@@ -1,21 +1,22 @@
 package com.jobq;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.JsonNode;
-import com.jobq.internal.JobTypeMetadataRegistry;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.stereotype.Service;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.jobq.config.JobQProperties;
-
+import com.jobq.internal.JobTypeMetadataRegistry;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.UUID;
 import java.util.regex.Pattern;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.core.annotation.AnnotationUtils;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.stereotype.Service;
+import org.springframework.util.ClassUtils;
 
 @Service
 public class JobClient {
@@ -32,8 +33,12 @@ public class JobClient {
     private final JobTypeMetadataRegistry jobTypeMetadataRegistry;
 
     @Autowired
-    public JobClient(JobRepository jobRepository, ObjectMapper objectMapper, JobQProperties properties,
-            JdbcTemplate jdbcTemplate, JobTypeMetadataRegistry jobTypeMetadataRegistry) {
+    public JobClient(
+            JobRepository jobRepository,
+            ObjectMapper objectMapper,
+            JobQProperties properties,
+            JdbcTemplate jdbcTemplate,
+            JobTypeMetadataRegistry jobTypeMetadataRegistry) {
         this.jobRepository = jobRepository;
         this.objectMapper = objectMapper;
         this.properties = properties;
@@ -43,7 +48,10 @@ public class JobClient {
         this.dedupUpsertSql = buildDedupUpsertSql(jobTableName);
     }
 
-    JobClient(JobRepository jobRepository, ObjectMapper objectMapper, JobQProperties properties,
+    JobClient(
+            JobRepository jobRepository,
+            ObjectMapper objectMapper,
+            JobQProperties properties,
             JdbcTemplate jdbcTemplate) {
         this(jobRepository, objectMapper, properties, jdbcTemplate, null);
     }
@@ -52,7 +60,14 @@ public class JobClient {
      * Enqueue a job with the default number of retries.
      */
     public UUID enqueue(String type, Object payload) {
-        return enqueue(type, payload, properties.getJobs().getDefaultNumberOfRetries(), null, null, null);
+        return enqueue(type, payload, resolveDefaultMaxRetries(type), null, null, null);
+    }
+
+    /**
+     * Enqueue a job by class using the class' @Job value.
+     */
+    public UUID enqueue(Class<?> jobClass, Object payload) {
+        return enqueue(resolveJobType(jobClass), payload);
     }
 
     /**
@@ -63,10 +78,24 @@ public class JobClient {
     }
 
     /**
+     * Enqueue a job by class with a custom number of retries.
+     */
+    public UUID enqueue(Class<?> jobClass, Object payload, int maxRetries) {
+        return enqueue(resolveJobType(jobClass), payload, maxRetries);
+    }
+
+    /**
      * Enqueue a job with a groupId for parallel group execution.
      */
     public UUID enqueue(String type, Object payload, String groupId) {
-        return enqueue(type, payload, properties.getJobs().getDefaultNumberOfRetries(), groupId, null, null);
+        return enqueue(type, payload, resolveDefaultMaxRetries(type), groupId, null, null);
+    }
+
+    /**
+     * Enqueue a job by class with a groupId for parallel group execution.
+     */
+    public UUID enqueue(Class<?> jobClass, Object payload, String groupId) {
+        return enqueue(resolveJobType(jobClass), payload, groupId);
     }
 
     /**
@@ -75,39 +104,79 @@ public class JobClient {
      * deduplicates and returns that existing job ID.
      */
     public UUID enqueue(String type, Object payload, String groupId, String replaceKey) {
-        return enqueue(type, payload, properties.getJobs().getDefaultNumberOfRetries(), groupId, replaceKey, null);
+        return enqueue(type, payload, resolveDefaultMaxRetries(type), groupId, replaceKey, null);
+    }
+
+    /**
+     * Enqueue a job by class with groupId and replaceKey.
+     */
+    public UUID enqueue(Class<?> jobClass, Object payload, String groupId, String replaceKey) {
+        return enqueue(resolveJobType(jobClass), payload, groupId, replaceKey);
     }
 
     /**
      * Enqueue a job to run at the provided instant.
      */
     public UUID enqueueAt(String type, Object payload, Instant runAt) {
-        return enqueueAt(type, payload, properties.getJobs().getDefaultNumberOfRetries(), null, null,
-                normalizeRequiredRunAt(runAt));
+        return enqueueAt(type, payload, resolveDefaultMaxRetries(type), null, null, normalizeRequiredRunAt(runAt));
+    }
+
+    /**
+     * Enqueue a job by class to run at the provided instant.
+     */
+    public UUID enqueueAt(Class<?> jobClass, Object payload, Instant runAt) {
+        return enqueueAt(resolveJobType(jobClass), payload, runAt);
     }
 
     /**
      * Enqueue a job to run at the provided date-time.
      */
     public UUID enqueueAt(String type, Object payload, OffsetDateTime runAt) {
-        return enqueueAt(type, payload, properties.getJobs().getDefaultNumberOfRetries(), null, null,
-                normalizeRequiredRunAt(runAt));
+        return enqueueAt(type, payload, resolveDefaultMaxRetries(type), null, null, normalizeRequiredRunAt(runAt));
+    }
+
+    /**
+     * Enqueue a job by class to run at the provided date-time.
+     */
+    public UUID enqueueAt(Class<?> jobClass, Object payload, OffsetDateTime runAt) {
+        return enqueueAt(resolveJobType(jobClass), payload, runAt);
     }
 
     /**
      * Full enqueue-at method with all options.
      */
-    public UUID enqueueAt(String type, Object payload, int maxRetries, String groupId, String replaceKey,
-            Instant runAt) {
+    public UUID enqueueAt(
+            String type, Object payload, int maxRetries, String groupId, String replaceKey, Instant runAt) {
         return enqueueAt(type, payload, maxRetries, groupId, replaceKey, normalizeRequiredRunAt(runAt));
     }
 
     /**
+     * Full enqueue-at method by class with all options.
+     */
+    public UUID enqueueAt(
+            Class<?> jobClass, Object payload, int maxRetries, String groupId, String replaceKey, Instant runAt) {
+        return enqueueAt(resolveJobType(jobClass), payload, maxRetries, groupId, replaceKey, runAt);
+    }
+
+    /**
      * Full enqueue-at method with all options.
      */
-    public UUID enqueueAt(String type, Object payload, int maxRetries, String groupId, String replaceKey,
-            OffsetDateTime runAt) {
+    public UUID enqueueAt(
+            String type, Object payload, int maxRetries, String groupId, String replaceKey, OffsetDateTime runAt) {
         return enqueue(type, payload, maxRetries, groupId, replaceKey, normalizeRequiredRunAt(runAt));
+    }
+
+    /**
+     * Full enqueue-at method by class with all options.
+     */
+    public UUID enqueueAt(
+            Class<?> jobClass,
+            Object payload,
+            int maxRetries,
+            String groupId,
+            String replaceKey,
+            OffsetDateTime runAt) {
+        return enqueueAt(resolveJobType(jobClass), payload, maxRetries, groupId, replaceKey, runAt);
     }
 
     /**
@@ -117,7 +186,19 @@ public class JobClient {
         return enqueue(type, payload, maxRetries, groupId, replaceKey, null);
     }
 
-    private UUID enqueue(String type, Object payload, int maxRetries, String groupId, String replaceKey,
+    /**
+     * Full enqueue method by class with all options.
+     */
+    public UUID enqueue(Class<?> jobClass, Object payload, int maxRetries, String groupId, String replaceKey) {
+        return enqueue(resolveJobType(jobClass), payload, maxRetries, groupId, replaceKey);
+    }
+
+    private UUID enqueue(
+            String type,
+            Object payload,
+            int maxRetries,
+            String groupId,
+            String replaceKey,
             OffsetDateTime explicitRunAt) {
         String normalizedType = normalizeRequiredType(type);
         validateMaxRetries(maxRetries);
@@ -131,9 +212,19 @@ public class JobClient {
         // races under high concurrency.
         if (normalizedReplaceKey != null) {
             boolean updateRunAtOnReplace = shouldUpdateRunAtOnReplace(normalizedType, explicitRunAt);
-            UUID dedupedId = upsertPendingDeduplicatedJob(normalizedType, jsonNode, maxRetries, normalizedGroupId,
-                    normalizedReplaceKey, resolvedRunAt, now, updateRunAtOnReplace);
-            log.debug("Dedup-enqueued job {} of type {} with replaceKey '{}'", dedupedId, normalizedType,
+            UUID dedupedId = upsertPendingDeduplicatedJob(
+                    normalizedType,
+                    jsonNode,
+                    maxRetries,
+                    normalizedGroupId,
+                    normalizedReplaceKey,
+                    resolvedRunAt,
+                    now,
+                    updateRunAtOnReplace);
+            log.debug(
+                    "Dedup-enqueued job {} of type {} with replaceKey '{}'",
+                    dedupedId,
+                    normalizedType,
                     normalizedReplaceKey);
             return dedupedId;
         }
@@ -202,6 +293,33 @@ public class JobClient {
         return jobTypeMetadataRegistry.initialDelayMsFor(jobType);
     }
 
+    private int resolveDefaultMaxRetries(String jobType) {
+        int fallbackMaxRetries = properties.getJobs().getDefaultNumberOfRetries();
+        if (jobTypeMetadataRegistry == null) {
+            return fallbackMaxRetries;
+        }
+        String normalizedType = normalizeRequiredType(jobType);
+        return jobTypeMetadataRegistry.defaultMaxRetriesFor(normalizedType, fallbackMaxRetries);
+    }
+
+    private String resolveJobType(Class<?> jobClass) {
+        if (jobTypeMetadataRegistry != null) {
+            return normalizeRequiredType(jobTypeMetadataRegistry.jobTypeFor(jobClass));
+        }
+        if (jobClass == null) {
+            throw new IllegalArgumentException("Job class must not be null");
+        }
+        Class<?> targetClass = ClassUtils.getUserClass(jobClass);
+        com.jobq.annotation.Job annotation = AnnotationUtils.findAnnotation(targetClass, com.jobq.annotation.Job.class);
+        if (annotation == null) {
+            throw new IllegalArgumentException("Job class " + targetClass.getName()
+                    + " has no @Job annotation and no registry mapping. Use enqueue(String, payload).");
+        }
+        String configuredType =
+                annotation.value() == null ? "" : annotation.value().trim();
+        return normalizeRequiredType(configuredType.isEmpty() ? targetClass.getName() : configuredType);
+    }
+
     private boolean shouldUpdateRunAtOnReplace(String jobType, OffsetDateTime explicitRunAt) {
         if (explicitRunAt != null) {
             return true;
@@ -209,12 +327,19 @@ public class JobClient {
         if (jobTypeMetadataRegistry == null) {
             return true;
         }
-        return jobTypeMetadataRegistry
-                .deduplicationRunAtPolicyFor(jobType) == com.jobq.annotation.Job.DeduplicationRunAtPolicy.UPDATE_ON_REPLACE;
+        return jobTypeMetadataRegistry.deduplicationRunAtPolicyFor(jobType)
+                == com.jobq.annotation.Job.DeduplicationRunAtPolicy.UPDATE_ON_REPLACE;
     }
 
-    private UUID upsertPendingDeduplicatedJob(String type, JsonNode payload, int maxRetries, String groupId,
-            String replaceKey, OffsetDateTime runAt, OffsetDateTime now, boolean updateRunAtOnReplace) {
+    private UUID upsertPendingDeduplicatedJob(
+            String type,
+            JsonNode payload,
+            int maxRetries,
+            String groupId,
+            String replaceKey,
+            OffsetDateTime runAt,
+            OffsetDateTime now,
+            boolean updateRunAtOnReplace) {
         UUID insertedId = UUID.randomUUID();
         String payloadJson = payload == null ? null : payload.toString();
 
@@ -271,6 +396,7 @@ public class JobClient {
                   locked_at = NULL,
                   locked_by = NULL
                 RETURNING id
-                """.formatted(tableName);
+                """
+                .formatted(tableName);
     }
 }

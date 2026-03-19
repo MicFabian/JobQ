@@ -2,18 +2,21 @@ package com.jobq.internal;
 
 import com.jobq.JobRepository;
 import com.jobq.config.JobQProperties;
+import java.time.Duration;
+import java.time.OffsetDateTime;
+import java.util.Locale;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
-import java.time.Duration;
-import java.time.OffsetDateTime;
-import java.util.Locale;
-
 @Component
-@ConditionalOnProperty(prefix = "jobq.background-job-server", name = "enabled", havingValue = "true", matchIfMissing = true)
+@ConditionalOnProperty(
+        prefix = "jobq.background-job-server",
+        name = "enabled",
+        havingValue = "true",
+        matchIfMissing = true)
 public class JobCleaner {
 
     private static final Logger log = LoggerFactory.getLogger(JobCleaner.class);

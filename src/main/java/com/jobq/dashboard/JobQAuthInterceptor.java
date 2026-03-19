@@ -3,15 +3,14 @@ package com.jobq.dashboard;
 import com.jobq.config.JobQProperties;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.Principal;
+import java.util.Base64;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.web.servlet.HandlerInterceptor;
-
-import java.security.MessageDigest;
-import java.nio.charset.StandardCharsets;
-import java.security.Principal;
-import java.util.Base64;
 
 @Component
 public class JobQAuthInterceptor implements HandlerInterceptor {

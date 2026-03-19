@@ -3,6 +3,7 @@ plugins {
     id 'groovy'
     id 'org.springframework.boot' version '4.0.0' apply false
     id 'io.spring.dependency-management' version '1.1.4'
+    id 'com.diffplug.spotless' version '7.2.1'
     id 'maven-publish'
     id 'signing'
     id 'io.github.gradle-nexus.publish-plugin' version '2.0.0'
@@ -84,6 +85,13 @@ tasks.withType(Test) {
 tasks.withType(Javadoc).configureEach {
     options.encoding = 'UTF-8'
     options.addBooleanOption('Xdoclint:none', true)
+}
+
+spotless {
+    java {
+        target 'src/*/java/**/*.java'
+        palantirJavaFormat()
+    }
 }
 
 tasks.register('loadTest', Test) {

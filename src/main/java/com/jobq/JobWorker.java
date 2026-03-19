@@ -1,10 +1,9 @@
 package com.jobq;
 
-import org.springframework.core.ResolvableType;
-import org.springframework.util.ClassUtils;
-
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import org.springframework.core.ResolvableType;
+import org.springframework.util.ClassUtils;
 
 /**
  * Interface representing a processor that can execute jobs of a specific type.
@@ -24,13 +23,15 @@ public interface JobWorker<T> {
      */
     default String getJobType() {
         Class<?> targetClass = ClassUtils.getUserClass(this);
-        com.jobq.annotation.Job annotation = org.springframework.core.annotation.AnnotationUtils
-                .findAnnotation(targetClass, com.jobq.annotation.Job.class);
-        if (annotation == null || annotation.value().isBlank()) {
-            throw new IllegalStateException("JobWorker " + targetClass.getName() +
-                    " must either be annotated with @Job or override getJobType()");
+        com.jobq.annotation.Job annotation = org.springframework.core.annotation.AnnotationUtils.findAnnotation(
+                targetClass, com.jobq.annotation.Job.class);
+        if (annotation == null) {
+            throw new IllegalStateException("JobWorker " + targetClass.getName()
+                    + " must either be annotated with @Job or override getJobType()");
         }
-        return annotation.value();
+        String configuredType =
+                annotation.value() == null ? "" : annotation.value().trim();
+        return configuredType.isEmpty() ? targetClass.getName() : configuredType;
     }
 
     /**
@@ -87,8 +88,9 @@ public interface JobWorker<T> {
                 .getGeneric(0)
                 .resolve();
         if (resolved == null) {
-            throw new IllegalStateException("JobWorker " + targetClass.getName()
-                    + " payload type cannot be inferred. Specify a concrete generic type or override getPayloadClass().");
+            throw new IllegalStateException(
+                    "JobWorker " + targetClass.getName()
+                            + " payload type cannot be inferred. Specify a concrete generic type or override getPayloadClass().");
         }
         return resolved;
     }

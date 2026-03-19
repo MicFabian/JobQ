@@ -3,19 +3,18 @@ package com.jobq;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import com.jobq.config.JobQProperties;
+import java.util.Locale;
 import org.hibernate.boot.model.naming.Identifier;
 import org.hibernate.boot.model.naming.PhysicalNamingStrategySnakeCaseImpl;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.AutoConfigurationPackage;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
-import org.springframework.boot.hibernate.autoconfigure.HibernatePropertiesCustomizer;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
+import org.springframework.boot.hibernate.autoconfigure.HibernatePropertiesCustomizer;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.ComponentScan;
 import org.springframework.context.annotation.Import;
 import org.springframework.scheduling.annotation.EnableScheduling;
-
-import java.util.Locale;
 
 @AutoConfiguration
 @AutoConfigurationPackage
@@ -39,10 +38,11 @@ public class JobQAutoConfiguration {
         return hibernateProperties -> {
             String prefix = properties.getDatabase().getTablePrefix();
             if (prefix != null && !prefix.trim().isEmpty()) {
-                hibernateProperties.put("hibernate.physical_naming_strategy",
-                        new PhysicalNamingStrategySnakeCaseImpl() {
+                hibernateProperties.put(
+                        "hibernate.physical_naming_strategy", new PhysicalNamingStrategySnakeCaseImpl() {
                             @Override
-                            public Identifier toPhysicalTableName(Identifier name,
+                            public Identifier toPhysicalTableName(
+                                    Identifier name,
                                     org.hibernate.engine.jdbc.env.spi.JdbcEnvironment jdbcEnvironment) {
                                 Identifier original = super.toPhysicalTableName(name, jdbcEnvironment);
                                 // Only intercept JobQ tables
@@ -55,5 +55,4 @@ public class JobQAutoConfiguration {
             }
         };
     }
-
 }

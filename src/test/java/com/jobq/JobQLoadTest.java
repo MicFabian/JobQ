@@ -1,19 +1,8 @@
 package com.jobq;
 
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Tag;
-import org.junit.jupiter.api.Test;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.context.annotation.Bean;
-import org.springframework.context.annotation.Configuration;
-import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.test.context.ActiveProfiles;
-import org.springframework.test.context.DynamicPropertyRegistry;
-import org.springframework.test.context.DynamicPropertySource;
-import org.testcontainers.containers.PostgreSQLContainer;
-import org.testcontainers.junit.jupiter.Container;
-import org.testcontainers.junit.jupiter.Testcontainers;
+import static org.awaitility.Awaitility.await;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.time.Duration;
 import java.time.OffsetDateTime;
@@ -29,15 +18,26 @@ import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.IntConsumer;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Tag;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.test.context.ActiveProfiles;
+import org.springframework.test.context.DynamicPropertyRegistry;
+import org.springframework.test.context.DynamicPropertySource;
+import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.junit.jupiter.Container;
+import org.testcontainers.junit.jupiter.Testcontainers;
 
-import static org.awaitility.Awaitility.await;
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertTrue;
-
-@SpringBootTest(classes = { TestApplication.class,
-        JobQLoadTest.LoadTestConfig.class }, properties = {
-                "jobq.background-job-server.poll-interval-in-seconds=1",
-                "jobq.background-job-server.worker-count=32"
+@SpringBootTest(
+        classes = {TestApplication.class, JobQLoadTest.LoadTestConfig.class},
+        properties = {
+            "jobq.background-job-server.poll-interval-in-seconds=1",
+            "jobq.background-job-server.worker-count=32"
         })
 @ActiveProfiles("test")
 @Testcontainers
@@ -133,11 +133,17 @@ class JobQLoadTest {
             return new LoadFlakyWorker();
         }
 
-        @com.jobq.annotation.Job(value = "LOAD_FLAKY_JOB", maxRetries = 3, initialBackoffMs = 20, backoffMultiplier = 1.0)
+        @com.jobq.annotation.Job(
+                value = "LOAD_FLAKY_JOB",
+                maxRetries = 3,
+                initialBackoffMs = 20,
+                backoffMultiplier = 1.0)
         static class LoadFlakyWorker implements JobWorker<TestPayload> {
             @Override
             public void process(UUID jobId, TestPayload payload) {
-                int attempt = flakyAttempts.computeIfAbsent(jobId, ignored -> new AtomicInteger(0)).incrementAndGet();
+                int attempt = flakyAttempts
+                        .computeIfAbsent(jobId, ignored -> new AtomicInteger(0))
+                        .incrementAndGet();
                 if (attempt < 3) {
                     throw new RuntimeException("transient load error");
                 }
@@ -167,8 +173,7 @@ class JobQLoadTest {
     public static class TestPayload {
         private String message;
 
-        public TestPayload() {
-        }
+        public TestPayload() {}
 
         public TestPayload(String message) {
             this.message = message;
@@ -235,8 +240,8 @@ class JobQLoadTest {
         int expectedJobs = 400;
 
         runConcurrently(flakyJobs, 10, i -> jobClient.enqueue("LOAD_FLAKY_JOB", new TestPayload("flaky-" + i), 3));
-        runConcurrently(expectedJobs, 10,
-                i -> jobClient.enqueue("LOAD_EXPECTED_JOB", new TestPayload("expected-" + i), 3));
+        runConcurrently(
+                expectedJobs, 10, i -> jobClient.enqueue("LOAD_EXPECTED_JOB", new TestPayload("expected-" + i), 3));
 
         await().atMost(Duration.ofSeconds(120)).untilAsserted(() -> {
             assertEquals(flakyJobs, countCompletedByType("LOAD_FLAKY_JOB"));
@@ -265,8 +270,8 @@ class JobQLoadTest {
         scheduledLatch = new CountDownLatch(jobs);
         OffsetDateTime runAt = OffsetDateTime.now().plusSeconds(3);
 
-        runConcurrently(jobs, 12,
-                i -> jobClient.enqueueAt("LOAD_SCHEDULED_JOB", new TestPayload("scheduled-" + i), runAt));
+        runConcurrently(
+                jobs, 12, i -> jobClient.enqueueAt("LOAD_SCHEDULED_JOB", new TestPayload("scheduled-" + i), runAt));
 
         Thread.sleep(1_500);
         assertEquals(0, countCompletedByType("LOAD_SCHEDULED_JOB"));
@@ -326,8 +331,8 @@ class JobQLoadTest {
     }
 
     private long countActiveByType(String type) {
-        return queryCount("SELECT count(*) FROM jobq_jobs WHERE type = ? AND finished_at IS NULL AND failed_at IS NULL",
-                type);
+        return queryCount(
+                "SELECT count(*) FROM jobq_jobs WHERE type = ? AND finished_at IS NULL AND failed_at IS NULL", type);
     }
 
     private long queryCount(String sql, Object... args) {

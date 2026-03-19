@@ -22,8 +22,7 @@ public class JobQWebMvcConfigurer implements WebMvcConfigurer {
     public void addInterceptors(InterceptorRegistry registry) {
         String dashboardPath = normalizeDashboardPath(properties.getDashboard().getPath());
         // Protect both the internal dashboard endpoints and the configured external entry path.
-        registry.addInterceptor(authInterceptor)
-                .addPathPatterns("/jobq/**", dashboardPath, dashboardPath + "/**");
+        registry.addInterceptor(authInterceptor).addPathPatterns("/jobq/**", dashboardPath, dashboardPath + "/**");
     }
 
     private String normalizeDashboardPath(String configuredPath) {

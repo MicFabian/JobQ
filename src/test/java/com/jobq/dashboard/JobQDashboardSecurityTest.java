@@ -1,21 +1,20 @@
 package com.jobq.dashboard;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.jobq.JobRepository;
-import com.jobq.config.JobQProperties;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
-import org.springframework.http.HttpHeaders;
-import org.springframework.test.web.servlet.MockMvc;
-import org.springframework.test.web.servlet.setup.MockMvcBuilders;
-
-import java.util.Base64;
-
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.jobq.JobRepository;
+import com.jobq.config.JobQProperties;
+import java.util.Base64;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.springframework.http.HttpHeaders;
+import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
 class JobQDashboardSecurityTest {
 
@@ -77,8 +76,7 @@ class JobQDashboardSecurityTest {
     void shouldReturnUnauthorizedWithInvalidCredentials() throws Exception {
         String base64Creds = Base64.getEncoder().encodeToString("admin:wrongpassword".getBytes());
 
-        mockMvc.perform(get("/jobq/htmx/stats")
-                .header(HttpHeaders.AUTHORIZATION, "Basic " + base64Creds))
+        mockMvc.perform(get("/jobq/htmx/stats").header(HttpHeaders.AUTHORIZATION, "Basic " + base64Creds))
                 .andExpect(status().isUnauthorized());
     }
 
@@ -86,8 +84,7 @@ class JobQDashboardSecurityTest {
     void shouldReturnOkWithValidCredentials() throws Exception {
         String base64Creds = Base64.getEncoder().encodeToString("admin:supersecret".getBytes());
 
-        mockMvc.perform(get("/jobq/htmx/stats")
-                .header(HttpHeaders.AUTHORIZATION, "Basic " + base64Creds))
+        mockMvc.perform(get("/jobq/htmx/stats").header(HttpHeaders.AUTHORIZATION, "Basic " + base64Creds))
                 .andExpect(status().isOk());
     }
 
@@ -96,7 +93,8 @@ class JobQDashboardSecurityTest {
         JobQProperties properties = new JobQProperties();
         MockMvc missingCredsMvc = buildMockMvc(properties);
 
-        missingCredsMvc.perform(get("/jobq/htmx/stats"))
+        missingCredsMvc
+                .perform(get("/jobq/htmx/stats"))
                 .andExpect(status().isUnauthorized())
                 .andExpect(header().string(HttpHeaders.WWW_AUTHENTICATE, "Basic realm=\"JobQ Dashboard\""));
     }
@@ -107,8 +105,7 @@ class JobQDashboardSecurityTest {
         properties.getDashboard().setAuthMode(JobQProperties.Dashboard.AuthMode.SPRING_SECURITY);
         MockMvc mvc = buildMockMvc(properties);
 
-        mvc.perform(get("/jobq/htmx/stats"))
-                .andExpect(status().isUnauthorized());
+        mvc.perform(get("/jobq/htmx/stats")).andExpect(status().isUnauthorized());
     }
 
     @Test
@@ -119,10 +116,11 @@ class JobQDashboardSecurityTest {
         MockMvc mvc = buildMockMvc(properties);
 
         mvc.perform(get("/jobq/htmx/stats").with(request -> {
-            request.setUserPrincipal(() -> "alice");
-            request.addUserRole("USER");
-            return request;
-        })).andExpect(status().isForbidden());
+                    request.setUserPrincipal(() -> "alice");
+                    request.addUserRole("USER");
+                    return request;
+                }))
+                .andExpect(status().isForbidden());
     }
 
     @Test
@@ -133,10 +131,11 @@ class JobQDashboardSecurityTest {
         MockMvc mvc = buildMockMvc(properties);
 
         mvc.perform(get("/jobq/htmx/stats").with(request -> {
-            request.setUserPrincipal(() -> "alice");
-            request.addUserRole("JOBQ_DASHBOARD");
-            return request;
-        })).andExpect(status().isOk());
+                    request.setUserPrincipal(() -> "alice");
+                    request.addUserRole("JOBQ_DASHBOARD");
+                    return request;
+                }))
+                .andExpect(status().isOk());
     }
 
     @Test
@@ -147,10 +146,11 @@ class JobQDashboardSecurityTest {
         MockMvc mvc = buildMockMvc(properties);
 
         mvc.perform(get("/jobq/htmx/stats").with(request -> {
-            request.setUserPrincipal(() -> "alice");
-            request.addUserRole("JOBQ_DASHBOARD");
-            return request;
-        })).andExpect(status().isOk());
+                    request.setUserPrincipal(() -> "alice");
+                    request.addUserRole("JOBQ_DASHBOARD");
+                    return request;
+                }))
+                .andExpect(status().isOk());
     }
 
     @Test
@@ -161,9 +161,10 @@ class JobQDashboardSecurityTest {
         MockMvc mvc = buildMockMvc(properties);
 
         mvc.perform(get("/jobq/htmx/stats").with(request -> {
-            request.setUserPrincipal(() -> "alice");
-            request.addUserRole("ROLE_JOBQ_DASHBOARD");
-            return request;
-        })).andExpect(status().isOk());
+                    request.setUserPrincipal(() -> "alice");
+                    request.addUserRole("ROLE_JOBQ_DASHBOARD");
+                    return request;
+                }))
+                .andExpect(status().isOk());
     }
 }

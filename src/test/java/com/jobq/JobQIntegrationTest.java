@@ -1,5 +1,22 @@
 package com.jobq;
 
+import static org.awaitility.Awaitility.await;
+import static org.junit.jupiter.api.Assertions.*;
+
+import java.time.Duration;
+import java.time.OffsetDateTime;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.UUID;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -13,27 +30,9 @@ import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
-import java.time.OffsetDateTime;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
-import java.util.UUID;
-import java.util.concurrent.ConcurrentLinkedQueue;
-import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicReference;
-import java.time.Duration;
-
-import static org.awaitility.Awaitility.await;
-import static org.junit.jupiter.api.Assertions.*;
-
-@SpringBootTest(classes = { TestApplication.class,
-        JobQIntegrationTest.TestConfig.class }, properties = "jobq.background-job-server.poll-interval-in-seconds=1")
+@SpringBootTest(
+        classes = {TestApplication.class, JobQIntegrationTest.TestConfig.class},
+        properties = "jobq.background-job-server.poll-interval-in-seconds=1")
 @ActiveProfiles("test")
 @Testcontainers
 public class JobQIntegrationTest {
@@ -317,6 +316,21 @@ public class JobQIntegrationTest {
             return new AnnotationOnlyJob();
         }
 
+        @com.jobq.annotation.Job(payload = TestPayload.class)
+        static class AnnotationClassNameJob {
+            @SuppressWarnings("unused")
+            public void process(UUID jobId, TestPayload payload) {
+                lastAnnotationOnlyProcessedJobId = jobId;
+                lastAnnotationOnlyMessage = payload.getMessage();
+                jobLatch.countDown();
+            }
+        }
+
+        @Bean
+        AnnotationClassNameJob annotationClassNameJob() {
+            return new AnnotationClassNameJob();
+        }
+
         @com.jobq.annotation.Job(value = "ANNOTATION_ON_ERROR_JOB", payload = TestPayload.class)
         static class AnnotationOnErrorJob {
             @SuppressWarnings("unused")
@@ -406,7 +420,9 @@ public class JobQIntegrationTest {
             return new AnnotationAfterAlwaysJob();
         }
 
-        @com.jobq.annotation.Job(value = "EXPECTED_EXCEPTION_JOB", expectedExceptions = { ExpectedBusinessException.class })
+        @com.jobq.annotation.Job(
+                value = "EXPECTED_EXCEPTION_JOB",
+                expectedExceptions = {ExpectedBusinessException.class})
         static class ExpectedExceptionWorker implements JobWorker<TestPayload> {
             @Override
             public void process(UUID jobId, TestPayload payload) {
@@ -511,7 +527,11 @@ public class JobQIntegrationTest {
             };
         }
 
-        @com.jobq.annotation.Job(value = "BACKOFF_JOB", maxRetries = 3, initialBackoffMs = 3000, backoffMultiplier = 2.0)
+        @com.jobq.annotation.Job(
+                value = "BACKOFF_JOB",
+                maxRetries = 3,
+                initialBackoffMs = 3000,
+                backoffMultiplier = 2.0)
         static class BackoffJobWorker implements JobWorker<TestPayload> {
             @Override
             public String getJobType() {
@@ -535,7 +555,10 @@ public class JobQIntegrationTest {
             return new BackoffJobWorker();
         }
 
-        @com.jobq.annotation.Job(value = "PRIORITY_JOB", maxRetries = 2, retryPriority = com.jobq.annotation.Job.RetryPriority.HIGHER_ON_RETRY)
+        @com.jobq.annotation.Job(
+                value = "PRIORITY_JOB",
+                maxRetries = 2,
+                retryPriority = com.jobq.annotation.Job.RetryPriority.HIGHER_ON_RETRY)
         static class HigherPriorityJobWorker implements JobWorker<TestPayload> {
             @Override
             public String getJobType() {
@@ -559,7 +582,10 @@ public class JobQIntegrationTest {
             return new HigherPriorityJobWorker();
         }
 
-        @com.jobq.annotation.Job(value = "LOWER_PRIORITY_JOB", maxRetries = 2, retryPriority = com.jobq.annotation.Job.RetryPriority.LOWER_ON_RETRY)
+        @com.jobq.annotation.Job(
+                value = "LOWER_PRIORITY_JOB",
+                maxRetries = 2,
+                retryPriority = com.jobq.annotation.Job.RetryPriority.LOWER_ON_RETRY)
         static class LowerPriorityJobWorker implements JobWorker<TestPayload> {
             @Override
             public String getJobType() {
@@ -653,8 +679,7 @@ public class JobQIntegrationTest {
     public static class TestPayload {
         private String message;
 
-        public TestPayload() {
-        }
+        public TestPayload() {}
 
         public TestPayload(String message) {
             this.message = message;
@@ -684,10 +709,24 @@ public class JobQIntegrationTest {
             columnNames.add((String) col.get("column_name"));
         }
         assertTrue(columnNames.containsAll(List.of(
-                "id", "type", "payload", "created_at", "updated_at",
-                "locked_at", "locked_by", "processing_started_at", "finished_at", "failed_at",
-                "error_message", "retry_count", "max_retries", "priority",
-                "run_at", "group_id", "replace_key", "cron")));
+                "id",
+                "type",
+                "payload",
+                "created_at",
+                "updated_at",
+                "locked_at",
+                "locked_by",
+                "processing_started_at",
+                "finished_at",
+                "failed_at",
+                "error_message",
+                "retry_count",
+                "max_retries",
+                "priority",
+                "run_at",
+                "group_id",
+                "replace_key",
+                "cron")));
     }
 
     @Test
@@ -709,10 +748,9 @@ public class JobQIntegrationTest {
     @Test
     void shouldCreateTheUniqueReplaceKeyIndex() {
         Integer indexCount = jdbcTemplate.queryForObject(
-                "SELECT count(*) FROM pg_indexes " +
-                        "WHERE tablename = 'jobq_jobs' " +
-                        "AND indexname = 'idx_jobq_jobs_replace_key' " +
-                        "AND indexdef LIKE 'CREATE UNIQUE INDEX%'",
+                "SELECT count(*) FROM pg_indexes " + "WHERE tablename = 'jobq_jobs' "
+                        + "AND indexname = 'idx_jobq_jobs_replace_key' "
+                        + "AND indexdef LIKE 'CREATE UNIQUE INDEX%'",
                 Integer.class);
         assertEquals(1, indexCount);
     }
@@ -746,13 +784,11 @@ public class JobQIntegrationTest {
         assertEquals(1, migrationTableCount);
 
         Integer baselineMigrationCount = jdbcTemplate.queryForObject(
-                "SELECT count(*) FROM jobq_schema_migrations WHERE version = '1'",
-                Integer.class);
+                "SELECT count(*) FROM jobq_schema_migrations WHERE version = '1'", Integer.class);
         assertEquals(1, baselineMigrationCount);
 
         String checksum = jdbcTemplate.queryForObject(
-                "SELECT checksum FROM jobq_schema_migrations WHERE version = '1'",
-                String.class);
+                "SELECT checksum FROM jobq_schema_migrations WHERE version = '1'", String.class);
         assertNotNull(checksum);
         assertFalse(checksum.isBlank());
     }
@@ -761,10 +797,12 @@ public class JobQIntegrationTest {
     void shouldRollBackEnqueuedJobWhenOuterTransactionFails() {
         AtomicReference<UUID> jobIdRef = new AtomicReference<>();
 
-        assertThrows(RuntimeException.class, () -> transactionTemplate.executeWithoutResult(status -> {
-            jobIdRef.set(jobClient.enqueue("TEST_JOB", new TestPayload("rolled-back")));
-            throw new RuntimeException("force rollback");
-        }));
+        assertThrows(
+                RuntimeException.class,
+                () -> transactionTemplate.executeWithoutResult(status -> {
+                    jobIdRef.set(jobClient.enqueue("TEST_JOB", new TestPayload("rolled-back")));
+                    throw new RuntimeException("force rollback");
+                }));
 
         assertNotNull(jobIdRef.get());
         assertTrue(jobRepository.findById(jobIdRef.get()).isEmpty());
@@ -832,6 +870,43 @@ public class JobQIntegrationTest {
             Job job = jobRepository.findById(jobId).orElseThrow();
             assertEquals(jobId, lastAnnotationOnlyProcessedJobId);
             assertEquals("Annotation only", lastAnnotationOnlyMessage);
+            assertEquals("COMPLETED", job.getStatus());
+        });
+    }
+
+    @Test
+    void shouldEnqueueAndProcessAnnotationOnlyJobUsingClassBasedApi() throws InterruptedException {
+        jobLatch = new CountDownLatch(1);
+        lastAnnotationOnlyMessage = null;
+        lastAnnotationOnlyProcessedJobId = null;
+
+        UUID jobId = jobClient.enqueue(TestConfig.AnnotationOnlyJob.class, new TestPayload("Annotation class"));
+
+        assertTrue(jobLatch.await(10, TimeUnit.SECONDS));
+
+        await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
+            Job job = jobRepository.findById(jobId).orElseThrow();
+            assertEquals(jobId, lastAnnotationOnlyProcessedJobId);
+            assertEquals("Annotation class", lastAnnotationOnlyMessage);
+            assertEquals("COMPLETED", job.getStatus());
+        });
+    }
+
+    @Test
+    void shouldFallbackToClassNameTypeWhenAnnotationValueIsOmitted() throws InterruptedException {
+        jobLatch = new CountDownLatch(1);
+        lastAnnotationOnlyMessage = null;
+        lastAnnotationOnlyProcessedJobId = null;
+
+        UUID jobId = jobClient.enqueue(TestConfig.AnnotationClassNameJob.class, new TestPayload("Class-name type"));
+
+        assertTrue(jobLatch.await(10, TimeUnit.SECONDS));
+
+        await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
+            Job job = jobRepository.findById(jobId).orElseThrow();
+            assertEquals(TestConfig.AnnotationClassNameJob.class.getName(), job.getType());
+            assertEquals(jobId, lastAnnotationOnlyProcessedJobId);
+            assertEquals("Class-name type", lastAnnotationOnlyMessage);
             assertEquals("COMPLETED", job.getStatus());
         });
     }
@@ -1181,7 +1256,8 @@ public class JobQIntegrationTest {
 
         await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
             for (UUID id : enqueuedIds) {
-                assertEquals("COMPLETED", jobRepository.findById(id).orElseThrow().getStatus());
+                assertEquals(
+                        "COMPLETED", jobRepository.findById(id).orElseThrow().getStatus());
             }
         });
     }
@@ -1190,8 +1266,8 @@ public class JobQIntegrationTest {
     void shouldNotProcessJobWhoseRunAtIsInTheFuture() throws InterruptedException {
         UUID jobId = UUID.randomUUID();
         jdbcTemplate.update(
-                "INSERT INTO jobq_jobs (id, type, payload, run_at, max_retries, priority) " +
-                        "VALUES (?, 'TEST_JOB', '{\"message\":\"future\"}', NOW() + INTERVAL '1 hour', 3, 0)",
+                "INSERT INTO jobq_jobs (id, type, payload, run_at, max_retries, priority) "
+                        + "VALUES (?, 'TEST_JOB', '{\"message\":\"future\"}', NOW() + INTERVAL '1 hour', 3, 0)",
                 jobId);
 
         Thread.sleep(2000);
@@ -1209,6 +1285,7 @@ public class JobQIntegrationTest {
         UUID jobId = jobClient.enqueue("INITIAL_DELAY_JOB", new TestPayload("delayed"));
         Job queued = jobRepository.findById(jobId).orElseThrow();
         assertTrue(queued.getRunAt().isAfter(OffsetDateTime.now().plusSeconds(1)));
+        assertEquals(3, queued.getMaxRetries());
 
         Thread.sleep(1200);
         Job stillPending = jobRepository.findById(jobId).orElseThrow();
@@ -1240,7 +1317,8 @@ public class JobQIntegrationTest {
             Job completed = jobRepository.findById(jobId).orElseThrow();
             assertEquals("COMPLETED", completed.getStatus());
             assertEquals("explicit", lastProcessedMessage);
-            long runAtDeltaMs = Math.abs(Duration.between(scheduledRunAt, completed.getRunAt()).toMillis());
+            long runAtDeltaMs = Math.abs(
+                    Duration.between(scheduledRunAt, completed.getRunAt()).toMillis());
             assertTrue(runAtDeltaMs < 1000, "Persisted runAt should stay close to explicit schedule");
         });
     }
@@ -1266,19 +1344,18 @@ public class JobQIntegrationTest {
         UUID highId = UUID.randomUUID();
 
         jdbcTemplate.update(
-                "INSERT INTO jobq_jobs (id, type, payload, run_at, max_retries, priority, updated_at) " +
-                        "VALUES (?, 'PRIORITY_ORDER_JOB', '{\"message\":\"low\"}', NOW(), 3, 0, NOW())",
+                "INSERT INTO jobq_jobs (id, type, payload, run_at, max_retries, priority, updated_at) "
+                        + "VALUES (?, 'PRIORITY_ORDER_JOB', '{\"message\":\"low\"}', NOW(), 3, 0, NOW())",
                 lowId);
         jdbcTemplate.update(
-                "INSERT INTO jobq_jobs (id, type, payload, run_at, max_retries, priority, updated_at) " +
-                        "VALUES (?, 'PRIORITY_ORDER_JOB', '{\"message\":\"high\"}', NOW(), 3, 10, NOW())",
+                "INSERT INTO jobq_jobs (id, type, payload, run_at, max_retries, priority, updated_at) "
+                        + "VALUES (?, 'PRIORITY_ORDER_JOB', '{\"message\":\"high\"}', NOW(), 3, 10, NOW())",
                 highId);
 
         // Verify the repository query correctly orders by priority DESC.
         // PageRequest of 1 simulates fetching the absolute most urgent job first.
-        List<Job> nextJobs = transactionTemplate
-                .execute(status -> jobRepository.findNextJobsForUpdate("PRIORITY_ORDER_JOB",
-                        org.springframework.data.domain.PageRequest.of(0, 1)));
+        List<Job> nextJobs = transactionTemplate.execute(status -> jobRepository.findNextJobsForUpdate(
+                "PRIORITY_ORDER_JOB", org.springframework.data.domain.PageRequest.of(0, 1)));
 
         assertEquals(1, nextJobs.size());
         assertEquals(highId, nextJobs.get(0).getId());
@@ -1325,8 +1402,10 @@ public class JobQIntegrationTest {
         UUID firstId = jobClient.enqueue("TEST_JOB", new TestPayload("first"), "group-b", "dedup-key-2");
         jobLatch.await(10, TimeUnit.SECONDS);
 
-        await().atMost(Duration.ofSeconds(10)).untilAsserted(
-                () -> assertEquals("COMPLETED", jobRepository.findById(firstId).orElseThrow().getStatus()));
+        await().atMost(Duration.ofSeconds(10))
+                .untilAsserted(() -> assertEquals(
+                        "COMPLETED",
+                        jobRepository.findById(firstId).orElseThrow().getStatus()));
 
         // Now enqueue with same key — should create a new job, not touch the completed
         // one
@@ -1374,10 +1453,11 @@ public class JobQIntegrationTest {
         assertEquals(1, new HashSet<>(returnedIds).size(), "All concurrent callers should receive the same job id");
 
         Integer pendingRows = jdbcTemplate.queryForObject(
-                "SELECT count(*) FROM jobq_jobs " +
-                        "WHERE type = ? AND replace_key = ? " +
-                        "AND processing_started_at IS NULL AND finished_at IS NULL AND failed_at IS NULL",
-                Integer.class, type, replaceKey);
+                "SELECT count(*) FROM jobq_jobs " + "WHERE type = ? AND replace_key = ? "
+                        + "AND processing_started_at IS NULL AND finished_at IS NULL AND failed_at IS NULL",
+                Integer.class,
+                type,
+                replaceKey);
         assertEquals(1, pendingRows);
     }
 
@@ -1414,8 +1494,10 @@ public class JobQIntegrationTest {
         assertTrue(jobLatch.await(10, TimeUnit.SECONDS));
 
         await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
-            assertEquals("COMPLETED", jobRepository.findById(firstId).orElseThrow().getStatus());
-            assertEquals("COMPLETED", jobRepository.findById(secondId).orElseThrow().getStatus());
+            assertEquals(
+                    "COMPLETED", jobRepository.findById(firstId).orElseThrow().getStatus());
+            assertEquals(
+                    "COMPLETED", jobRepository.findById(secondId).orElseThrow().getStatus());
         });
     }
 
@@ -1443,7 +1525,8 @@ public class JobQIntegrationTest {
         OffsetDateTime firstRunAt = first.getRunAt();
 
         Thread.sleep(150);
-        UUID secondId = jobClient.enqueue("DEDUP_UPDATE_DELAY_JOB", new TestPayload("second"), "dedup-delay", replaceKey);
+        UUID secondId =
+                jobClient.enqueue("DEDUP_UPDATE_DELAY_JOB", new TestPayload("second"), "dedup-delay", replaceKey);
         assertEquals(firstId, secondId);
 
         Job replaced = jobRepository.findById(firstId).orElseThrow();
@@ -1475,7 +1558,8 @@ public class JobQIntegrationTest {
 
         await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
             for (UUID id : ids) {
-                assertEquals("COMPLETED", jobRepository.findById(id).orElseThrow().getStatus());
+                assertEquals(
+                        "COMPLETED", jobRepository.findById(id).orElseThrow().getStatus());
             }
         });
     }
@@ -1491,7 +1575,8 @@ public class JobQIntegrationTest {
         jobLatch.await(10, TimeUnit.SECONDS);
 
         await().atMost(Duration.ofSeconds(10))
-                .untilAsserted(() -> assertEquals("FAILED", jobRepository.findById(jobId).orElseThrow().getStatus()));
+                .untilAsserted(() -> assertEquals(
+                        "FAILED", jobRepository.findById(jobId).orElseThrow().getStatus()));
 
         // Manual restart: reset to PENDING
         Job failedJob = jobRepository.findById(jobId).orElseThrow();
@@ -1521,13 +1606,15 @@ public class JobQIntegrationTest {
         UUID secondId = UUID.randomUUID();
 
         jdbcTemplate.update(
-                "INSERT INTO jobq_jobs (id, type, payload, run_at, max_retries, priority, created_at, updated_at) " +
-                        "VALUES (?, ?, '{\"message\":\"first\"}', NOW(), 3, 0, NOW() - INTERVAL '2 seconds', NOW())",
-                firstId, type);
+                "INSERT INTO jobq_jobs (id, type, payload, run_at, max_retries, priority, created_at, updated_at) "
+                        + "VALUES (?, ?, '{\"message\":\"first\"}', NOW(), 3, 0, NOW() - INTERVAL '2 seconds', NOW())",
+                firstId,
+                type);
         jdbcTemplate.update(
-                "INSERT INTO jobq_jobs (id, type, payload, run_at, max_retries, priority, created_at, updated_at) " +
-                        "VALUES (?, ?, '{\"message\":\"second\"}', NOW(), 3, 0, NOW() - INTERVAL '1 seconds', NOW())",
-                secondId, type);
+                "INSERT INTO jobq_jobs (id, type, payload, run_at, max_retries, priority, created_at, updated_at) "
+                        + "VALUES (?, ?, '{\"message\":\"second\"}', NOW(), 3, 0, NOW() - INTERVAL '1 seconds', NOW())",
+                secondId,
+                type);
 
         CountDownLatch firstLockAcquired = new CountDownLatch(1);
         CountDownLatch releaseFirstLock = new CountDownLatch(1);
@@ -1537,8 +1624,8 @@ public class JobQIntegrationTest {
         Thread tx1 = new Thread(() -> {
             try {
                 transactionTemplate.executeWithoutResult(status -> {
-                    List<Job> firstBatch = jobRepository.findNextJobsForUpdate(type,
-                            org.springframework.data.domain.PageRequest.of(0, 1));
+                    List<Job> firstBatch = jobRepository.findNextJobsForUpdate(
+                            type, org.springframework.data.domain.PageRequest.of(0, 1));
                     if (!firstBatch.isEmpty()) {
                         lockedIdByTx1.set(firstBatch.get(0).getId());
                     }
@@ -1565,8 +1652,9 @@ public class JobQIntegrationTest {
 
         Thread tx2 = new Thread(() -> {
             try {
-                transactionTemplate.executeWithoutResult(status -> secondBatchRef.set(
-                        jobRepository.findNextJobsForUpdate(type, org.springframework.data.domain.PageRequest.of(0, 1))));
+                transactionTemplate.executeWithoutResult(
+                        status -> secondBatchRef.set(jobRepository.findNextJobsForUpdate(
+                                type, org.springframework.data.domain.PageRequest.of(0, 1))));
             } catch (Throwable t) {
                 tx2Error.set(t);
             } finally {
@@ -1595,7 +1683,8 @@ public class JobQIntegrationTest {
         // Wait for at least 2 executions (cron is every 2 seconds)
         recurringJobLatch = new CountDownLatch(2);
 
-        assertTrue(recurringJobLatch.await(15, TimeUnit.SECONDS),
+        assertTrue(
+                recurringJobLatch.await(15, TimeUnit.SECONDS),
                 "Recurring job should have executed at least twice. Actual count: " + recurringJobCount.get());
 
         // Success means the job was processed, then rescheduled, then processed again.
@@ -1606,10 +1695,9 @@ public class JobQIntegrationTest {
                     "SELECT count(*) FROM jobq_jobs WHERE type = 'RECURRING_JOB' AND cron = '*/2 * * * * *'",
                     Long.class);
             Long activeRows = jdbcTemplate.queryForObject(
-                    "SELECT count(*) FROM jobq_jobs " +
-                            "WHERE type = 'RECURRING_JOB' " +
-                            "AND cron = '*/2 * * * * *' " +
-                            "AND finished_at IS NULL AND failed_at IS NULL",
+                    "SELECT count(*) FROM jobq_jobs " + "WHERE type = 'RECURRING_JOB' "
+                            + "AND cron = '*/2 * * * * *' "
+                            + "AND finished_at IS NULL AND failed_at IS NULL",
                     Long.class);
 
             assertNotNull(recurringRows);
@@ -1623,11 +1711,12 @@ public class JobQIntegrationTest {
     void shouldNotMarkCompletedWhenLockOwnerDoesNotMatch() {
         UUID jobId = UUID.randomUUID();
         jdbcTemplate.update(
-                "INSERT INTO jobq_jobs (id, type, payload, processing_started_at, locked_at, locked_by, max_retries, retry_count, priority, run_at, updated_at) " +
-                        "VALUES (?, 'TEST_JOB', '{\"message\":\"locked\"}', NOW(), NOW(), 'node-owner', 3, 0, 0, NOW(), NOW())",
+                "INSERT INTO jobq_jobs (id, type, payload, processing_started_at, locked_at, locked_by, max_retries, retry_count, priority, run_at, updated_at) "
+                        + "VALUES (?, 'TEST_JOB', '{\"message\":\"locked\"}', NOW(), NOW(), 'node-owner', 3, 0, 0, NOW(), NOW())",
                 jobId);
 
-        int updated = transactionTemplate.execute(status -> jobRepository.markCompleted(jobId, OffsetDateTime.now(), "node-other"));
+        int updated = transactionTemplate.execute(
+                status -> jobRepository.markCompleted(jobId, OffsetDateTime.now(), "node-other"));
         assertNotNull(updated);
         assertEquals(0, updated);
 
@@ -1640,21 +1729,14 @@ public class JobQIntegrationTest {
     void shouldNotApplyRetryUpdateWhenExpectedRetryCountDoesNotMatch() {
         UUID jobId = UUID.randomUUID();
         jdbcTemplate.update(
-                "INSERT INTO jobq_jobs (id, type, payload, processing_started_at, locked_at, locked_by, max_retries, retry_count, priority, run_at, updated_at, error_message) " +
-                        "VALUES (?, 'RETRY_JOB', '{\"message\":\"retry\"}', NOW(), NOW(), 'node-owner', 3, 2, 5, NOW(), NOW(), 'old')",
+                "INSERT INTO jobq_jobs (id, type, payload, processing_started_at, locked_at, locked_by, max_retries, retry_count, priority, run_at, updated_at, error_message) "
+                        + "VALUES (?, 'RETRY_JOB', '{\"message\":\"retry\"}', NOW(), NOW(), 'node-owner', 3, 2, 5, NOW(), NOW(), 'old')",
                 jobId);
 
         OffsetDateTime now = OffsetDateTime.now();
         OffsetDateTime nextRunAt = now.plusSeconds(30);
-        int updated = transactionTemplate.execute(status -> jobRepository.markForRetry(
-                jobId,
-                1,
-                3,
-                "new-error",
-                now,
-                nextRunAt,
-                4,
-                "node-owner"));
+        int updated = transactionTemplate.execute(
+                status -> jobRepository.markForRetry(jobId, 1, 3, "new-error", now, nextRunAt, 4, "node-owner"));
         assertNotNull(updated);
         assertEquals(0, updated);
 
@@ -1668,21 +1750,14 @@ public class JobQIntegrationTest {
     void shouldNotApplyRetryUpdateWhenLockOwnerDoesNotMatch() {
         UUID jobId = UUID.randomUUID();
         jdbcTemplate.update(
-                "INSERT INTO jobq_jobs (id, type, payload, processing_started_at, locked_at, locked_by, max_retries, retry_count, priority, run_at, updated_at, error_message) " +
-                        "VALUES (?, 'RETRY_JOB', '{\"message\":\"retry\"}', NOW(), NOW(), 'node-owner', 3, 1, 5, NOW(), NOW(), 'old')",
+                "INSERT INTO jobq_jobs (id, type, payload, processing_started_at, locked_at, locked_by, max_retries, retry_count, priority, run_at, updated_at, error_message) "
+                        + "VALUES (?, 'RETRY_JOB', '{\"message\":\"retry\"}', NOW(), NOW(), 'node-owner', 3, 1, 5, NOW(), NOW(), 'old')",
                 jobId);
 
         OffsetDateTime now = OffsetDateTime.now();
         OffsetDateTime nextRunAt = now.plusSeconds(30);
-        int updated = transactionTemplate.execute(status -> jobRepository.markForRetry(
-                jobId,
-                1,
-                2,
-                "new-error",
-                now,
-                nextRunAt,
-                4,
-                "node-other"));
+        int updated = transactionTemplate.execute(
+                status -> jobRepository.markForRetry(jobId, 1, 2, "new-error", now, nextRunAt, 4, "node-other"));
         assertNotNull(updated);
         assertEquals(0, updated);
 
@@ -1697,18 +1772,13 @@ public class JobQIntegrationTest {
     void shouldNotMarkFailedTerminalWhenLockOwnerDoesNotMatch() {
         UUID jobId = UUID.randomUUID();
         jdbcTemplate.update(
-                "INSERT INTO jobq_jobs (id, type, payload, processing_started_at, locked_at, locked_by, max_retries, retry_count, priority, run_at, updated_at, error_message) " +
-                        "VALUES (?, 'RETRY_JOB', '{\"message\":\"retry\"}', NOW(), NOW(), 'node-owner', 1, 1, 0, NOW(), NOW(), 'old')",
+                "INSERT INTO jobq_jobs (id, type, payload, processing_started_at, locked_at, locked_by, max_retries, retry_count, priority, run_at, updated_at, error_message) "
+                        + "VALUES (?, 'RETRY_JOB', '{\"message\":\"retry\"}', NOW(), NOW(), 'node-owner', 1, 1, 0, NOW(), NOW(), 'old')",
                 jobId);
 
         OffsetDateTime now = OffsetDateTime.now();
-        int updated = transactionTemplate.execute(status -> jobRepository.markFailedTerminal(
-                jobId,
-                1,
-                2,
-                "terminal-error",
-                now,
-                "node-other"));
+        int updated = transactionTemplate.execute(
+                status -> jobRepository.markFailedTerminal(jobId, 1, 2, "terminal-error", now, "node-other"));
         assertNotNull(updated);
         assertEquals(0, updated);
 

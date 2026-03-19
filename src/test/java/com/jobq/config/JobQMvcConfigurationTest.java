@@ -1,14 +1,13 @@
 package com.jobq.config;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
+
+import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.springframework.context.support.StaticApplicationContext;
 import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.web.servlet.config.annotation.ViewControllerRegistration;
 import org.springframework.web.servlet.config.annotation.ViewControllerRegistry;
-
-import java.util.List;
-
-import static org.junit.jupiter.api.Assertions.assertEquals;
 
 class JobQMvcConfigurationTest {
 
@@ -22,8 +21,8 @@ class JobQMvcConfigurationTest {
         configuration.addViewControllers(registry);
 
         @SuppressWarnings("unchecked")
-        List<ViewControllerRegistration> registrations = (List<ViewControllerRegistration>) ReflectionTestUtils
-                .getField(registry, "registrations");
+        List<ViewControllerRegistration> registrations =
+                (List<ViewControllerRegistration>) ReflectionTestUtils.getField(registry, "registrations");
 
         assertEquals(1, registrations.size());
         assertEquals("/jobq/dashboard", ReflectionTestUtils.getField(registrations.get(0), "urlPath"));
@@ -39,8 +38,8 @@ class JobQMvcConfigurationTest {
         configuration.addViewControllers(registry);
 
         @SuppressWarnings("unchecked")
-        List<ViewControllerRegistration> registrations = (List<ViewControllerRegistration>) ReflectionTestUtils
-                .getField(registry, "registrations");
+        List<ViewControllerRegistration> registrations =
+                (List<ViewControllerRegistration>) ReflectionTestUtils.getField(registry, "registrations");
 
         assertEquals(1, registrations.size());
         assertEquals("/ops/jobq", ReflectionTestUtils.getField(registrations.get(0), "urlPath"));

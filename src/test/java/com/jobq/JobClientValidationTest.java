@@ -1,24 +1,25 @@
 package com.jobq;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.jobq.config.JobQProperties;
-import com.jobq.internal.JobTypeMetadataRegistry;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
-import org.mockito.ArgumentCaptor;
-import org.springframework.jdbc.core.JdbcTemplate;
-
-import java.time.Duration;
-import java.time.OffsetDateTime;
-import java.util.UUID;
-
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.jobq.config.JobQProperties;
+import com.jobq.internal.JobTypeMetadataRegistry;
+import java.time.Duration;
+import java.time.OffsetDateTime;
+import java.util.UUID;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
+import org.springframework.jdbc.core.JdbcTemplate;
 
 class JobClientValidationTest {
 
@@ -26,6 +27,14 @@ class JobClientValidationTest {
     private JdbcTemplate jdbcTemplate;
     private JobTypeMetadataRegistry jobTypeMetadataRegistry;
     private JobClient jobClient;
+
+    @com.jobq.annotation.Job("CLASS_BASED_JOB")
+    static class ClassBasedJob {}
+
+    @com.jobq.annotation.Job
+    static class ClassNameFallbackJob {}
+
+    static class NonJobClass {}
 
     @BeforeEach
     void setUp() {
@@ -38,15 +47,40 @@ class JobClientValidationTest {
 
         jobClient = new JobClient(jobRepository, new ObjectMapper(), properties, jdbcTemplate, jobTypeMetadataRegistry);
         when(jobRepository.save(any(Job.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(jobTypeMetadataRegistry.defaultMaxRetriesFor(anyString(), anyInt()))
+                .thenAnswer(invocation -> invocation.getArgument(1));
+        when(jobTypeMetadataRegistry.jobTypeFor(any())).thenAnswer(invocation -> {
+            Class<?> jobClass = invocation.getArgument(0);
+            if (jobClass == null) {
+                throw new IllegalArgumentException("Job class must not be null");
+            }
+            com.jobq.annotation.Job annotation = jobClass.getAnnotation(com.jobq.annotation.Job.class);
+            if (annotation != null) {
+                String configuredType =
+                        annotation.value() == null ? "" : annotation.value().trim();
+                return configuredType.isEmpty() ? jobClass.getName() : configuredType;
+            }
+            throw new IllegalArgumentException("No job type mapping for " + jobClass.getName());
+        });
     }
 
     @Test
     void shouldRejectNullOrBlankJobType() {
-        assertThrows(IllegalArgumentException.class, () -> jobClient.enqueue(null, "payload"));
+        assertThrows(IllegalArgumentException.class, () -> jobClient.enqueue((String) null, "payload"));
         assertThrows(IllegalArgumentException.class, () -> jobClient.enqueue("   ", "payload"));
 
         verifyNoInteractions(jobRepository);
         verifyNoInteractions(jdbcTemplate);
+    }
+
+    @Test
+    void shouldRejectNonJobClassWhenEnqueueingByClass() {
+        assertThrows(IllegalArgumentException.class, () -> jobClient.enqueue(NonJobClass.class, "payload"));
+    }
+
+    @Test
+    void shouldRejectNullJobClassWhenEnqueueingByClass() {
+        assertThrows(IllegalArgumentException.class, () -> jobClient.enqueue((Class<?>) null, "payload"));
     }
 
     @Test
@@ -85,6 +119,54 @@ class JobClientValidationTest {
     }
 
     @Test
+    void shouldUseAnnotationMaxRetriesForDefaultEnqueue() {
+        when(jobTypeMetadataRegistry.defaultMaxRetriesFor("ANNOTATED_JOB", 10)).thenReturn(3);
+
+        jobClient.enqueue("ANNOTATED_JOB", "payload");
+
+        ArgumentCaptor<Job> jobCaptor = ArgumentCaptor.forClass(Job.class);
+        verify(jobRepository).save(jobCaptor.capture());
+        Job saved = jobCaptor.getValue();
+
+        assertEquals("ANNOTATED_JOB", saved.getType());
+        assertEquals(3, saved.getMaxRetries());
+    }
+
+    @Test
+    void shouldFallbackToGlobalDefaultRetriesWhenNoAnnotationMaxRetriesExists() {
+        jobClient.enqueue("PLAIN_JOB", "payload");
+
+        ArgumentCaptor<Job> jobCaptor = ArgumentCaptor.forClass(Job.class);
+        verify(jobRepository).save(jobCaptor.capture());
+        Job saved = jobCaptor.getValue();
+
+        assertEquals("PLAIN_JOB", saved.getType());
+        assertEquals(10, saved.getMaxRetries());
+    }
+
+    @Test
+    void shouldResolveTypeFromJobClassWhenEnqueueingByClass() {
+        jobClient.enqueue(ClassBasedJob.class, "payload");
+
+        ArgumentCaptor<Job> jobCaptor = ArgumentCaptor.forClass(Job.class);
+        verify(jobRepository).save(jobCaptor.capture());
+        Job saved = jobCaptor.getValue();
+
+        assertEquals("CLASS_BASED_JOB", saved.getType());
+    }
+
+    @Test
+    void shouldFallbackToClassNameWhenJobAnnotationValueIsOmitted() {
+        jobClient.enqueue(ClassNameFallbackJob.class, "payload");
+
+        ArgumentCaptor<Job> jobCaptor = ArgumentCaptor.forClass(Job.class);
+        verify(jobRepository).save(jobCaptor.capture());
+        Job saved = jobCaptor.getValue();
+
+        assertEquals(ClassNameFallbackJob.class.getName(), saved.getType());
+    }
+
+    @Test
     void shouldUseExplicitRunAtWhenProvided() {
         OffsetDateTime requestedRunAt = OffsetDateTime.now().plusMinutes(2).withNano(0);
 
@@ -99,6 +181,7 @@ class JobClientValidationTest {
 
     @Test
     void shouldRejectNullRunAtForEnqueueAt() {
-        assertThrows(IllegalArgumentException.class, () -> jobClient.enqueueAt("TYPE", "payload", (OffsetDateTime) null));
+        assertThrows(
+                IllegalArgumentException.class, () -> jobClient.enqueueAt("TYPE", "payload", (OffsetDateTime) null));
     }
 }

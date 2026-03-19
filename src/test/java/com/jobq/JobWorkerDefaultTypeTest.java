@@ -1,18 +1,25 @@
 package com.jobq;
 
-import org.junit.jupiter.api.Test;
-import org.springframework.aop.framework.ProxyFactory;
-
-import java.util.UUID;
-
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+
+import java.util.UUID;
+import org.junit.jupiter.api.Test;
+import org.springframework.aop.framework.ProxyFactory;
 
 class JobWorkerDefaultTypeTest {
 
     @com.jobq.annotation.Job("ANNOTATED_DEFAULT_TYPE")
     static class AnnotatedWorker implements JobWorker<String> {
+        @Override
+        public void process(UUID jobId, String payload) {
+            // no-op
+        }
+    }
+
+    @com.jobq.annotation.Job
+    static class AnnotatedClassNameWorker implements JobWorker<String> {
         @Override
         public void process(UUID jobId, String payload) {
             // no-op
@@ -26,7 +33,7 @@ class JobWorkerDefaultTypeTest {
         }
     }
 
-    @SuppressWarnings({ "rawtypes", "unchecked" })
+    @SuppressWarnings({"rawtypes", "unchecked"})
     static class RawWorker implements JobWorker {
         @Override
         public void process(UUID jobId, Object payload) {
@@ -37,6 +44,11 @@ class JobWorkerDefaultTypeTest {
     @Test
     void shouldResolveJobTypeFromAnnotationByDefault() {
         assertEquals("ANNOTATED_DEFAULT_TYPE", new AnnotatedWorker().getJobType());
+    }
+
+    @Test
+    void shouldFallbackToClassNameWhenAnnotationValueIsOmitted() {
+        assertEquals(AnnotatedClassNameWorker.class.getName(), new AnnotatedClassNameWorker().getJobType());
     }
 
     @Test
@@ -66,7 +78,8 @@ class JobWorkerDefaultTypeTest {
 
     @Test
     void shouldFailWhenWorkerHasNoAnnotationAndNoOverride() {
-        IllegalStateException ex = assertThrows(IllegalStateException.class, () -> new MissingTypeWorker().getJobType());
+        IllegalStateException ex =
+                assertThrows(IllegalStateException.class, () -> new MissingTypeWorker().getJobType());
         assertTrue(ex.getMessage().contains("must either be annotated with @Job or override getJobType()"));
     }
 

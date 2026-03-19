@@ -3,11 +3,10 @@ package com.jobq.internal;
 import com.jobq.JobRepository;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
+import jakarta.annotation.PostConstruct;
+import java.time.Duration;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import jakarta.annotation.PostConstruct;
-
-import java.time.Duration;
 
 public class JobQMetrics {
 
@@ -67,7 +66,10 @@ public class JobQMetrics {
 
     private double totalCount() {
         LifecycleSnapshot snapshot = getSnapshot();
-        return snapshot.pendingCount() + snapshot.processingCount() + snapshot.completedCount() + snapshot.failedCount();
+        return snapshot.pendingCount()
+                + snapshot.processingCount()
+                + snapshot.completedCount()
+                + snapshot.failedCount();
     }
 
     private LifecycleSnapshot getSnapshot() {
@@ -113,11 +115,7 @@ public class JobQMetrics {
         FAILED
     }
 
-    private record LifecycleSnapshot(
-            long pendingCount,
-            long processingCount,
-            long completedCount,
-            long failedCount) {
+    private record LifecycleSnapshot(long pendingCount, long processingCount, long completedCount, long failedCount) {
         private static LifecycleSnapshot empty() {
             return new LifecycleSnapshot(0, 0, 0, 0);
         }

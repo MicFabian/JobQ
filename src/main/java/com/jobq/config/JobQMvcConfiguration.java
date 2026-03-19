@@ -19,8 +19,7 @@ public class JobQMvcConfiguration implements WebMvcConfigurer {
     @Override
     public void addResourceHandlers(ResourceHandlerRegistry registry) {
         // Serve static assets out of the classpath jobq directory.
-        registry.addResourceHandler("/jobq/assets/**")
-                .addResourceLocations("classpath:/static/jobq/");
+        registry.addResourceHandler("/jobq/assets/**").addResourceLocations("classpath:/static/jobq/");
     }
 
     @Override

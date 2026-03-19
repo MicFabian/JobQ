@@ -1,5 +1,9 @@
 package com.jobq.config;
 
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.Mockito.mock;
+
 import com.jobq.JobQMetricsAutoConfiguration;
 import com.jobq.JobRepository;
 import com.jobq.internal.JobQMetrics;
@@ -8,20 +12,17 @@ import org.springframework.boot.autoconfigure.AutoConfigurations;
 import org.springframework.boot.test.context.FilteredClassLoader;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 
-import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.mockito.Mockito.mock;
-
 class JobQMetricsAutoConfigurationConditionalTest {
 
-    private final ApplicationContextRunner contextRunner = new ApplicationContextRunner()
-            .withConfiguration(AutoConfigurations.of(JobQMetricsAutoConfiguration.class));
+    private final ApplicationContextRunner contextRunner =
+            new ApplicationContextRunner().withConfiguration(AutoConfigurations.of(JobQMetricsAutoConfiguration.class));
 
     @Test
     void shouldNotCreateMetricsBeanWithoutMeterRegistryBean() {
         contextRunner
                 .withBean(JobRepository.class, () -> mock(JobRepository.class))
-                .run(context -> assertTrue(context.getBeansOfType(JobQMetrics.class).isEmpty()));
+                .run(context ->
+                        assertTrue(context.getBeansOfType(JobQMetrics.class).isEmpty()));
     }
 
     @Test

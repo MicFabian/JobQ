@@ -1,5 +1,14 @@
 package com.jobq;
 
+import static org.awaitility.Awaitility.await;
+import static org.junit.jupiter.api.Assertions.*;
+
+import java.time.Duration;
+import java.time.OffsetDateTime;
+import java.util.Map;
+import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -11,18 +20,10 @@ import org.springframework.test.context.DynamicPropertySource;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
-import static org.awaitility.Awaitility.await;
-import static org.junit.jupiter.api.Assertions.*;
 
-import java.time.OffsetDateTime;
-import java.util.Map;
-import java.util.UUID;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.TimeUnit;
-import java.time.Duration;
-
-@SpringBootTest(classes = { TestApplication.class,
-        JobAnnotationTest.AnnotationTestConfig.class }, properties = "jobq.background-job-server.poll-interval-in-seconds=1")
+@SpringBootTest(
+        classes = {TestApplication.class, JobAnnotationTest.AnnotationTestConfig.class},
+        properties = "jobq.background-job-server.poll-interval-in-seconds=1")
 @ActiveProfiles("test")
 @Testcontainers
 public class JobAnnotationTest {
@@ -54,7 +55,11 @@ public class JobAnnotationTest {
     @Configuration
     static class AnnotationTestConfig {
 
-        @com.jobq.annotation.Job(value = "ANNOTATION_BACKOFF_JOB", maxRetries = 3, initialBackoffMs = 500, backoffMultiplier = 2.0)
+        @com.jobq.annotation.Job(
+                value = "ANNOTATION_BACKOFF_JOB",
+                maxRetries = 3,
+                initialBackoffMs = 500,
+                backoffMultiplier = 2.0)
         static class AnnotationBackoffWorker implements JobWorker<Payload> {
             @Override
             public String getJobType() {
@@ -63,8 +68,7 @@ public class JobAnnotationTest {
 
             @Override
             public void process(UUID jobId, Payload payload) throws Exception {
-                if (jobLatch != null)
-                    jobLatch.countDown();
+                if (jobLatch != null) jobLatch.countDown();
                 throw new RuntimeException("Backoff failure #" + payload.getLabel());
             }
 
@@ -79,7 +83,12 @@ public class JobAnnotationTest {
             return new AnnotationBackoffWorker();
         }
 
-        @com.jobq.annotation.Job(value = "ANNOTATION_HIGHER_JOB", maxRetries = 4, initialBackoffMs = 200, backoffMultiplier = 1.0, retryPriority = com.jobq.annotation.Job.RetryPriority.HIGHER_ON_RETRY)
+        @com.jobq.annotation.Job(
+                value = "ANNOTATION_HIGHER_JOB",
+                maxRetries = 4,
+                initialBackoffMs = 200,
+                backoffMultiplier = 1.0,
+                retryPriority = com.jobq.annotation.Job.RetryPriority.HIGHER_ON_RETRY)
         static class AnnotationHigherWorker implements JobWorker<Payload> {
             @Override
             public String getJobType() {
@@ -102,7 +111,12 @@ public class JobAnnotationTest {
             return new AnnotationHigherWorker();
         }
 
-        @com.jobq.annotation.Job(value = "ANNOTATION_LOWER_JOB", maxRetries = 4, initialBackoffMs = 200, backoffMultiplier = 1.0, retryPriority = com.jobq.annotation.Job.RetryPriority.LOWER_ON_RETRY)
+        @com.jobq.annotation.Job(
+                value = "ANNOTATION_LOWER_JOB",
+                maxRetries = 4,
+                initialBackoffMs = 200,
+                backoffMultiplier = 1.0,
+                retryPriority = com.jobq.annotation.Job.RetryPriority.LOWER_ON_RETRY)
         static class AnnotationLowerWorker implements JobWorker<Payload> {
             @Override
             public String getJobType() {
@@ -125,7 +139,12 @@ public class JobAnnotationTest {
             return new AnnotationLowerWorker();
         }
 
-        @com.jobq.annotation.Job(value = "ANNOTATION_NORMAL_JOB", maxRetries = 3, initialBackoffMs = 200, backoffMultiplier = 1.0, retryPriority = com.jobq.annotation.Job.RetryPriority.NORMAL)
+        @com.jobq.annotation.Job(
+                value = "ANNOTATION_NORMAL_JOB",
+                maxRetries = 3,
+                initialBackoffMs = 200,
+                backoffMultiplier = 1.0,
+                retryPriority = com.jobq.annotation.Job.RetryPriority.NORMAL)
         static class AnnotationNormalWorker implements JobWorker<Payload> {
             @Override
             public String getJobType() {
@@ -158,8 +177,7 @@ public class JobAnnotationTest {
 
                 @Override
                 public void process(UUID jobId, Payload payload) throws Exception {
-                    if (jobLatch != null)
-                        jobLatch.countDown();
+                    if (jobLatch != null) jobLatch.countDown();
                     throw new RuntimeException("No annotation failure");
                 }
 
@@ -174,8 +192,7 @@ public class JobAnnotationTest {
     public static class Payload {
         private String label;
 
-        public Payload() {
-        }
+        public Payload() {}
 
         public Payload(String label) {
             this.label = label;

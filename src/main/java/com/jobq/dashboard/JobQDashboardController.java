@@ -5,6 +5,9 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.jobq.Job;
 import com.jobq.JobRepository;
+import java.time.OffsetDateTime;
+import java.time.format.DateTimeFormatter;
+import java.util.UUID;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Slice;
@@ -18,10 +21,6 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
-
-import java.time.format.DateTimeFormatter;
-import java.time.OffsetDateTime;
-import java.util.UUID;
 
 @RestController
 @RequestMapping("/jobq/htmx")
@@ -61,20 +60,51 @@ public class JobQDashboardController {
                     %s
                     %s
                 </div>
-                """.formatted(
-                statCard("Total Jobs", total, "", normalizedFilter, "ring-indigo-500", "text-slate-500", ""),
-                statCard("Pending", pending, "PENDING", normalizedFilter, "ring-blue-500", "text-blue-500",
-                        "<svg class='w-4 h-4' fill='none' stroke='currentColor' viewBox='0 0 24 24'><path stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z'></path></svg>"),
-                statCard("Processing", processing, "PROCESSING", normalizedFilter, "ring-amber-500", "text-amber-500",
-                        "<svg class='w-4 h-4' fill='none' stroke='currentColor' viewBox='0 0 24 24'><path stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15'></path></svg>"),
-                statCard("Completed", completed, "COMPLETED", normalizedFilter, "ring-emerald-500", "text-emerald-500",
-                        "<svg class='w-4 h-4' fill='none' stroke='currentColor' viewBox='0 0 24 24'><path stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M5 13l4 4L19 7'></path></svg>"),
-                statCard("Failed", failed, "FAILED", normalizedFilter, "ring-rose-500", "text-rose-500",
-                        "<svg class='w-4 h-4' fill='none' stroke='currentColor' viewBox='0 0 24 24'><path stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z'></path></svg>"));
+                """
+                .formatted(
+                        statCard("Total Jobs", total, "", normalizedFilter, "ring-indigo-500", "text-slate-500", ""),
+                        statCard(
+                                "Pending",
+                                pending,
+                                "PENDING",
+                                normalizedFilter,
+                                "ring-blue-500",
+                                "text-blue-500",
+                                "<svg class='w-4 h-4' fill='none' stroke='currentColor' viewBox='0 0 24 24'><path stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z'></path></svg>"),
+                        statCard(
+                                "Processing",
+                                processing,
+                                "PROCESSING",
+                                normalizedFilter,
+                                "ring-amber-500",
+                                "text-amber-500",
+                                "<svg class='w-4 h-4' fill='none' stroke='currentColor' viewBox='0 0 24 24'><path stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15'></path></svg>"),
+                        statCard(
+                                "Completed",
+                                completed,
+                                "COMPLETED",
+                                normalizedFilter,
+                                "ring-emerald-500",
+                                "text-emerald-500",
+                                "<svg class='w-4 h-4' fill='none' stroke='currentColor' viewBox='0 0 24 24'><path stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M5 13l4 4L19 7'></path></svg>"),
+                        statCard(
+                                "Failed",
+                                failed,
+                                "FAILED",
+                                normalizedFilter,
+                                "ring-rose-500",
+                                "text-rose-500",
+                                "<svg class='w-4 h-4' fill='none' stroke='currentColor' viewBox='0 0 24 24'><path stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z'></path></svg>"));
     }
 
-    private String statCard(String title, long value, String targetFilter, String activeFilter, String ringClass,
-            String textClass, String iconHtml) {
+    private String statCard(
+            String title,
+            long value,
+            String targetFilter,
+            String activeFilter,
+            String ringClass,
+            String textClass,
+            String iconHtml) {
         String activeState = activeFilter.equals(targetFilter) ? "ring-2 " + ringClass : "";
         String escapedFilter = escapeJs(targetFilter);
         return """
@@ -89,8 +119,16 @@ public class JobQDashboardController {
                     <div class="text-3xl font-bold text-slate-100">%d</div>
                 </div>
                 """
-                .formatted(activeState, escapedFilter, escapedFilter, escapedFilter, escapedFilter, textClass, iconHtml,
-                        title, value);
+                .formatted(
+                        activeState,
+                        escapedFilter,
+                        escapedFilter,
+                        escapedFilter,
+                        escapedFilter,
+                        textClass,
+                        iconHtml,
+                        title,
+                        value);
     }
 
     @GetMapping(value = "/jobs", produces = MediaType.TEXT_HTML_VALUE)
@@ -107,8 +145,14 @@ public class JobQDashboardController {
         int normalizedSize = Math.max(1, Math.min(200, size));
         String normalizedQuery = normalizeQuery(query);
         String normalizedSort = normalizeSort(sort);
-        Slice<JobRepository.DashboardJobView> jobsPage = loadDashboardJobsSlice(normalizedStatus, normalizedPage,
-                normalizedSize, normalizedQuery, normalizedSort, scheduledOnly, retriedOnly);
+        Slice<JobRepository.DashboardJobView> jobsPage = loadDashboardJobsSlice(
+                normalizedStatus,
+                normalizedPage,
+                normalizedSize,
+                normalizedQuery,
+                normalizedSort,
+                scheduledOnly,
+                retriedOnly);
         OffsetDateTime now = OffsetDateTime.now();
 
         StringBuilder rows = new StringBuilder(Math.max(512, normalizedSize * 640));
@@ -163,12 +207,15 @@ public class JobQDashboardController {
                                 """
                                 .formatted(
                                         job.getId().toString(),
-                                        getBadgeClass(statusLabel), statusLabel,
+                                        getBadgeClass(statusLabel),
+                                        statusLabel,
                                         escapeHtml(job.getType()),
                                         job.getRetryCount() > 0
                                                 ? "bg-rose-500/10 text-rose-400 border border-rose-500/20"
                                                 : "bg-slate-800 text-slate-400",
-                                        job.getRetryCount(), job.getMaxRetries(), job.getPriority(),
+                                        job.getRetryCount(),
+                                        job.getMaxRetries(),
+                                        job.getPriority(),
                                         job.getGroupId() != null ? escapeHtml(job.getGroupId()) : "—",
                                         job.getReplaceKey() != null ? escapeHtml(job.getReplaceKey()) : "—",
                                         timeline,
@@ -179,9 +226,9 @@ public class JobQDashboardController {
         }
         return ResponseEntity.ok()
                 .header(HttpHeaders.CONTENT_TYPE, MediaType.TEXT_HTML_VALUE)
-                .header("HX-Trigger",
-                        "{\"jobqPagination\":{\"page\":" + normalizedPage + ",\"hasNext\":" + jobsPage.hasNext()
-                                + "}}")
+                .header(
+                        "HX-Trigger",
+                        "{\"jobqPagination\":{\"page\":" + normalizedPage + ",\"hasNext\":" + jobsPage.hasNext() + "}}")
                 .body(rows.toString());
     }
 
@@ -199,17 +246,25 @@ public class JobQDashboardController {
         int normalizedSize = Math.max(1, Math.min(200, size));
         String normalizedQuery = normalizeQuery(query);
         String normalizedSort = normalizeSort(sort);
-        Slice<JobRepository.DashboardJobView> jobsPage = loadDashboardJobsSlice(normalizedStatus, normalizedPage,
-                normalizedSize, normalizedQuery, normalizedSort, scheduledOnly, retriedOnly);
+        Slice<JobRepository.DashboardJobView> jobsPage = loadDashboardJobsSlice(
+                normalizedStatus,
+                normalizedPage,
+                normalizedSize,
+                normalizedQuery,
+                normalizedSort,
+                scheduledOnly,
+                retriedOnly);
         return renderPaginationControls(normalizedStatus, normalizedPage, jobsPage.hasNext());
     }
 
     @GetMapping(value = "/job/{id}", produces = MediaType.TEXT_HTML_VALUE)
     public String getJobDetails(@PathVariable("id") UUID id) {
-        return jobRepository.findById(id).map(job -> {
-            String statusLabel = job.getStatus();
-            String errorHtml = job.getErrorMessage() != null
-                    ? """
+        return jobRepository
+                .findById(id)
+                .map(job -> {
+                    String statusLabel = job.getStatus();
+                    String errorHtml = job.getErrorMessage() != null
+                            ? """
                             <hr class="border-slate-800 my-4">
                             <div class="bg-rose-500/10 p-4 rounded-md border border-rose-500/20">
                                 <dt class="text-xs font-semibold uppercase tracking-wider text-rose-400 flex items-center gap-2 mb-2">
@@ -219,10 +274,10 @@ public class JobQDashboardController {
                                 <dd class="text-sm text-rose-300 font-mono whitespace-pre-wrap break-words max-h-48 overflow-y-auto">%s</dd>
                             </div>
                             """
-                            .formatted(escapeHtml(job.getErrorMessage()))
-                    : "";
+                                    .formatted(escapeHtml(job.getErrorMessage()))
+                            : "";
 
-            return """
+                    return """
                     <div class="fixed inset-0 z-50 overflow-hidden" aria-labelledby="slide-over-title" role="dialog" aria-modal="true">
                         <div class="absolute inset-0 bg-slate-950/80 backdrop-blur-sm transition-opacity cursor-pointer flex justify-start" onclick="document.getElementById('modal-container').innerHTML=''">
                             <button class="absolute top-4 left-4 p-2 text-slate-400 hover:text-white bg-slate-800 rounded-full bg-opacity-50">
@@ -310,56 +365,74 @@ public class JobQDashboardController {
                         </div>
                     </div>
                     """
-                    .formatted(
-                            getBadgeClass(statusLabel), statusLabel,
-                            job.getId().toString(),
-                            escapeHtml(job.getType()),
-                            job.getPriority(),
-                            job.getRetryCount() > 0 ? "text-rose-400" : "text-slate-200", job.getRetryCount(),
-                            job.getMaxRetries(),
-                            job.getLockedBy() != null ? job.getLockedBy() : "—",
-                            job.getCreatedAt() != null ? job.getCreatedAt().format(EXACT_FORMATTER) : "—",
-                            job.getRunAt() != null ? job.getRunAt().format(EXACT_FORMATTER) : "—",
-                            job.getProcessingStartedAt() != null ? job.getProcessingStartedAt().format(EXACT_FORMATTER) : "—",
-                            job.getFinishedAt() != null ? job.getFinishedAt().format(EXACT_FORMATTER) : "—",
-                            job.getFailedAt() != null ? job.getFailedAt().format(EXACT_FORMATTER) : "—",
-                            job.getGroupId() != null ? escapeHtml(job.getGroupId()) : "—",
-                            job.getReplaceKey() != null ? escapeHtml(job.getReplaceKey()) : "—",
-                            errorHtml,
-                            formatPayload(job.getPayload()),
-                            restartButtonHtml(job));
-        }).orElse("<div class='p-4 text-red-500'>Job not found.</div>");
+                            .formatted(
+                                    getBadgeClass(statusLabel),
+                                    statusLabel,
+                                    job.getId().toString(),
+                                    escapeHtml(job.getType()),
+                                    job.getPriority(),
+                                    job.getRetryCount() > 0 ? "text-rose-400" : "text-slate-200",
+                                    job.getRetryCount(),
+                                    job.getMaxRetries(),
+                                    job.getLockedBy() != null ? job.getLockedBy() : "—",
+                                    job.getCreatedAt() != null
+                                            ? job.getCreatedAt().format(EXACT_FORMATTER)
+                                            : "—",
+                                    job.getRunAt() != null ? job.getRunAt().format(EXACT_FORMATTER) : "—",
+                                    job.getProcessingStartedAt() != null
+                                            ? job.getProcessingStartedAt().format(EXACT_FORMATTER)
+                                            : "—",
+                                    job.getFinishedAt() != null
+                                            ? job.getFinishedAt().format(EXACT_FORMATTER)
+                                            : "—",
+                                    job.getFailedAt() != null
+                                            ? job.getFailedAt().format(EXACT_FORMATTER)
+                                            : "—",
+                                    job.getGroupId() != null ? escapeHtml(job.getGroupId()) : "—",
+                                    job.getReplaceKey() != null ? escapeHtml(job.getReplaceKey()) : "—",
+                                    errorHtml,
+                                    formatPayload(job.getPayload()),
+                                    restartButtonHtml(job));
+                })
+                .orElse("<div class='p-4 text-red-500'>Job not found.</div>");
     }
 
-    @PostMapping(value = { "/job/{id}/restart", "/job/{id}/retry", "/job/{id}/rerun" }, produces = MediaType.TEXT_HTML_VALUE)
+    @PostMapping(
+            value = {"/job/{id}/restart", "/job/{id}/retry", "/job/{id}/rerun"},
+            produces = MediaType.TEXT_HTML_VALUE)
     public ResponseEntity<String> rerunJob(@PathVariable("id") UUID id) {
-        String body = jobRepository.findById(id).map(job -> {
-            boolean failed = job.getFailedAt() != null;
-            boolean completed = job.getFinishedAt() != null;
-            if (!failed && !completed) {
-                return """
+        String body = jobRepository
+                .findById(id)
+                .map(job -> {
+                    boolean failed = job.getFailedAt() != null;
+                    boolean completed = job.getFinishedAt() != null;
+                    if (!failed && !completed) {
+                        return """
                         <div class="p-4 text-center text-amber-300 font-semibold">
                             Job %s is not in COMPLETED or FAILED state and cannot be rerun.
                         </div>
-                        """.formatted(id.toString().substring(0, 8));
-            }
+                        """
+                                .formatted(id.toString().substring(0, 8));
+                    }
 
-            job.setProcessingStartedAt(null);
-            job.setFinishedAt(null);
-            job.setFailedAt(null);
-            job.setRetryCount(0);
-            job.setErrorMessage(null);
-            job.setLockedAt(null);
-            job.setLockedBy(null);
-            job.setRunAt(java.time.OffsetDateTime.now());
-            job.setUpdatedAt(java.time.OffsetDateTime.now());
-            jobRepository.save(job);
-            return """
+                    job.setProcessingStartedAt(null);
+                    job.setFinishedAt(null);
+                    job.setFailedAt(null);
+                    job.setRetryCount(0);
+                    job.setErrorMessage(null);
+                    job.setLockedAt(null);
+                    job.setLockedBy(null);
+                    job.setRunAt(java.time.OffsetDateTime.now());
+                    job.setUpdatedAt(java.time.OffsetDateTime.now());
+                    jobRepository.save(job);
+                    return """
                     <div class="p-4 text-center text-emerald-400 font-semibold">
                         ✅ Job %s has been queued for %s. It will be picked up on the next poll cycle.
                     </div>
-                    """.formatted(id.toString().substring(0, 8), failed ? "retry" : "rerun");
-        }).orElse("<div class='p-4 text-red-500'>Job not found.</div>");
+                    """
+                            .formatted(id.toString().substring(0, 8), failed ? "retry" : "rerun");
+                })
+                .orElse("<div class='p-4 text-red-500'>Job not found.</div>");
         return ResponseEntity.ok()
                 .header(HttpHeaders.CONTENT_TYPE, MediaType.TEXT_HTML_VALUE)
                 .header("HX-Trigger", "jobq-refresh")
@@ -377,15 +450,16 @@ public class JobQDashboardController {
     }
 
     private String escapeHtml(String input) {
-        if (input == null)
-            return null;
-        return input.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;")
+        if (input == null) return null;
+        return input.replace("&", "&amp;")
+                .replace("<", "&lt;")
+                .replace(">", "&gt;")
+                .replace("\"", "&quot;")
                 .replace("'", "&#39;");
     }
 
     private String formatPayload(JsonNode payload) {
-        if (payload == null)
-            return "null";
+        if (payload == null) return "null";
         try {
             return escapeHtml(objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(payload));
         } catch (JsonProcessingException e) {
@@ -502,13 +576,16 @@ public class JobQDashboardController {
         OffsetDateTime createdAt = job.getCreatedAt();
         String createdAtText = createdAt != null ? createdAt.format(FORMATTER) : "—";
 
-        if ("PENDING".equals(statusLabel) && job.getRunAt() != null && job.getRunAt().isAfter(now)) {
+        if ("PENDING".equals(statusLabel)
+                && job.getRunAt() != null
+                && job.getRunAt().isAfter(now)) {
             return """
                     <div class="space-y-1">
                         <div>Created %s</div>
                         <div class="text-indigo-300 text-xs">Runs %s</div>
                     </div>
-                    """.formatted(createdAtText, job.getRunAt().format(FORMATTER));
+                    """
+                    .formatted(createdAtText, job.getRunAt().format(FORMATTER));
         }
 
         if ("PROCESSING".equals(statusLabel) && job.getProcessingStartedAt() != null) {
@@ -517,7 +594,8 @@ public class JobQDashboardController {
                         <div>Created %s</div>
                         <div class="text-amber-300 text-xs">Started %s</div>
                     </div>
-                    """.formatted(createdAtText, job.getProcessingStartedAt().format(FORMATTER));
+                    """
+                    .formatted(createdAtText, job.getProcessingStartedAt().format(FORMATTER));
         }
 
         if ("COMPLETED".equals(statusLabel) && job.getFinishedAt() != null) {
@@ -526,7 +604,8 @@ public class JobQDashboardController {
                         <div>Created %s</div>
                         <div class="text-emerald-300 text-xs">Finished %s</div>
                     </div>
-                    """.formatted(createdAtText, job.getFinishedAt().format(FORMATTER));
+                    """
+                    .formatted(createdAtText, job.getFinishedAt().format(FORMATTER));
         }
 
         if ("FAILED".equals(statusLabel) && job.getFailedAt() != null) {
@@ -535,7 +614,8 @@ public class JobQDashboardController {
                         <div>Created %s</div>
                         <div class="text-rose-300 text-xs">Failed %s</div>
                     </div>
-                    """.formatted(createdAtText, job.getFailedAt().format(FORMATTER));
+                    """
+                    .formatted(createdAtText, job.getFailedAt().format(FORMATTER));
         }
 
         return createdAtText;
@@ -604,8 +684,15 @@ public class JobQDashboardController {
             return "created-desc";
         }
         return switch (rawSort) {
-            case "created-asc", "priority-desc", "priority-asc", "retry-desc", "type-asc", "type-desc",
-                    "failed-desc", "run-at-asc", "run-at-desc" -> rawSort;
+            case "created-asc",
+                    "priority-desc",
+                    "priority-asc",
+                    "retry-desc",
+                    "type-asc",
+                    "type-desc",
+                    "failed-desc",
+                    "run-at-asc",
+                    "run-at-desc" -> rawSort;
             default -> "created-desc";
         };
     }
@@ -618,12 +705,11 @@ public class JobQDashboardController {
             case "retry-desc" -> Sort.by(Sort.Order.desc("retryCount"), Sort.Order.desc("createdAt"));
             case "type-asc" -> Sort.by(Sort.Order.asc("type"), Sort.Order.desc("createdAt"));
             case "type-desc" -> Sort.by(Sort.Order.desc("type"), Sort.Order.desc("createdAt"));
-            case "failed-desc" -> Sort.by(
-                    Sort.Order.desc("failedAt").nullsLast(),
-                    Sort.Order.desc("createdAt"),
-                    Sort.Order.desc("id"));
+            case "failed-desc" ->
+                Sort.by(Sort.Order.desc("failedAt").nullsLast(), Sort.Order.desc("createdAt"), Sort.Order.desc("id"));
             case "run-at-asc" -> Sort.by(Sort.Order.asc("runAt"), Sort.Order.desc("createdAt"), Sort.Order.asc("id"));
-            case "run-at-desc" -> Sort.by(Sort.Order.desc("runAt"), Sort.Order.desc("createdAt"), Sort.Order.desc("id"));
+            case "run-at-desc" ->
+                Sort.by(Sort.Order.desc("runAt"), Sort.Order.desc("createdAt"), Sort.Order.desc("id"));
             default -> Sort.by(Sort.Order.desc("createdAt"), Sort.Order.desc("id"));
         };
     }

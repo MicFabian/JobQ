@@ -1,9 +1,15 @@
 package com.example.jobqconsumer;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
 import com.jobq.Job;
 import com.jobq.JobClient;
 import com.jobq.JobRepository;
 import jakarta.persistence.EntityManagerFactory;
+import java.util.Map;
+import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
@@ -15,19 +21,9 @@ import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
-import java.util.Map;
-import java.util.UUID;
-
-import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
-import static org.junit.jupiter.api.Assertions.assertTrue;
-
 @SpringBootTest(
         classes = JobQStarterConsumerIntegrationTest.ConsumerApplication.class,
-        properties = {
-                "jobq.background-job-server.enabled=false",
-                "jobq.dashboard.enabled=false"
-        })
+        properties = {"jobq.background-job-server.enabled=false", "jobq.dashboard.enabled=false"})
 @ActiveProfiles("test")
 @Testcontainers
 class JobQStarterConsumerIntegrationTest {
@@ -87,6 +83,5 @@ class JobQStarterConsumerIntegrationTest {
     }
 
     @SpringBootApplication(scanBasePackages = "com.example.jobqconsumer")
-    static class ConsumerApplication {
-    }
+    static class ConsumerApplication {}
 }

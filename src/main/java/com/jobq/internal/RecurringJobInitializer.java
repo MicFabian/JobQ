@@ -3,6 +3,11 @@ package com.jobq.internal;
 import com.jobq.Job;
 import com.jobq.JobRepository;
 import com.jobq.JobWorker;
+import java.time.OffsetDateTime;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ListableBeanFactory;
@@ -12,12 +17,6 @@ import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.scheduling.support.CronExpression;
 import org.springframework.stereotype.Component;
 import org.springframework.util.ClassUtils;
-
-import java.time.OffsetDateTime;
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.UUID;
 
 /**
  * Bootstraps recurring jobs defined via @Job(cron = "...") on startup.
@@ -34,9 +33,7 @@ public class RecurringJobInitializer implements SmartLifecycle {
     private boolean running = false;
 
     public RecurringJobInitializer(
-            JobRepository jobRepository,
-            List<JobWorker<?>> workers,
-            ListableBeanFactory beanFactory) {
+            JobRepository jobRepository, List<JobWorker<?>> workers, ListableBeanFactory beanFactory) {
         this.jobRepository = jobRepository;
         this.workers = workers;
         this.beanFactory = beanFactory;
@@ -63,29 +60,27 @@ public class RecurringJobInitializer implements SmartLifecycle {
             if (jobAnnotation == null || jobAnnotation.cron().isBlank()) {
                 continue;
             }
-            String type = jobAnnotation.value() == null ? "" : jobAnnotation.value().trim();
-            if (type.isBlank()) {
-                throw new IllegalStateException("@Job value must not be blank on " + ClassUtils.getUserClass(bean).getName());
-            }
+            String type = resolveConfiguredTypeOrClassName(jobAnnotation.value(), ClassUtils.getUserClass(bean));
             registerRecurringDefinition(recurringJobs, type, jobAnnotation);
         }
 
         for (RecurringDefinition recurringDefinition : recurringJobs.values()) {
-            bootstrapRecurringJob(recurringDefinition.type(), recurringDefinition.cron(), recurringDefinition.maxRetries());
+            bootstrapRecurringJob(
+                    recurringDefinition.type(), recurringDefinition.cron(), recurringDefinition.maxRetries());
         }
 
         this.running = true;
     }
 
     private void registerRecurringDefinition(
-            Map<String, RecurringDefinition> recurringJobs,
-            String type,
-            com.jobq.annotation.Job jobAnnotation) {
-        RecurringDefinition definition = new RecurringDefinition(type, jobAnnotation.cron(), jobAnnotation.maxRetries());
+            Map<String, RecurringDefinition> recurringJobs, String type, com.jobq.annotation.Job jobAnnotation) {
+        RecurringDefinition definition =
+                new RecurringDefinition(type, jobAnnotation.cron(), jobAnnotation.maxRetries());
         RecurringDefinition existing = recurringJobs.putIfAbsent(type, definition);
-        if (existing != null && (!existing.cron().equals(definition.cron()) || existing.maxRetries() != definition.maxRetries())) {
-            throw new IllegalStateException(
-                    "Recurring job type '" + type + "' is configured multiple times with different cron/retry settings.");
+        if (existing != null
+                && (!existing.cron().equals(definition.cron()) || existing.maxRetries() != definition.maxRetries())) {
+            throw new IllegalStateException("Recurring job type '" + type
+                    + "' is configured multiple times with different cron/retry settings.");
         }
     }
 
@@ -96,24 +91,29 @@ public class RecurringJobInitializer implements SmartLifecycle {
 
     private void bootstrapRecurringJob(String type, String cronExpression, int maxRetries) {
         try {
-            boolean activeExists = jobRepository.existsByTypeAndCronAndFinishedAtIsNullAndFailedAtIsNull(type,
-                    cronExpression);
+            boolean activeExists =
+                    jobRepository.existsByTypeAndCronAndFinishedAtIsNullAndFailedAtIsNull(type, cronExpression);
             if (!activeExists) {
                 CronExpression cron = CronExpression.parse(cronExpression);
                 OffsetDateTime nextRun = cron.next(OffsetDateTime.now());
 
                 if (nextRun != null) {
-                    Job job = new Job(UUID.randomUUID(), type, null, maxRetries, 0, null,
-                            recurringReplaceKey(cronExpression));
+                    Job job = new Job(
+                            UUID.randomUUID(), type, null, maxRetries, 0, null, recurringReplaceKey(cronExpression));
                     job.setCron(cronExpression);
                     job.setRunAt(nextRun);
                     try {
                         jobRepository.save(job);
-                        log.info("Bootstrapped recurring job {} with cron '{}'. First execution scheduled at {}", type,
-                                cronExpression, nextRun);
+                        log.info(
+                                "Bootstrapped recurring job {} with cron '{}'. First execution scheduled at {}",
+                                type,
+                                cronExpression,
+                                nextRun);
                     } catch (DataIntegrityViolationException duplicateSchedule) {
-                        log.debug("Skipped duplicate recurring bootstrap for type {} and cron '{}'",
-                                type, cronExpression);
+                        log.debug(
+                                "Skipped duplicate recurring bootstrap for type {} and cron '{}'",
+                                type,
+                                cronExpression);
                     }
                 }
             } else {
@@ -143,6 +143,13 @@ public class RecurringJobInitializer implements SmartLifecycle {
         return "__jobq_recurring__:" + cronExpression;
     }
 
-    private record RecurringDefinition(String type, String cron, int maxRetries) {
+    private String resolveConfiguredTypeOrClassName(String configuredType, Class<?> ownerClass) {
+        String normalized = configuredType == null ? "" : configuredType.trim();
+        if (!normalized.isEmpty()) {
+            return normalized;
+        }
+        return ClassUtils.getUserClass(ownerClass).getName();
     }
+
+    private record RecurringDefinition(String type, String cron, int maxRetries) {}
 }

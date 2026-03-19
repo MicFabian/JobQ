@@ -1,17 +1,17 @@
 package com.jobq.internal;
 
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+
 import com.jobq.JobRepository;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-
-import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.times;
-import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.when;
 
 class JobQMetricsTest {
 
@@ -37,11 +37,15 @@ class JobQMetricsTest {
 
         jobQMetrics.registerMetrics();
 
-        Gauge pendingGauge = meterRegistry.find("jobq.jobs.count").tag("status", "PENDING").gauge();
+        Gauge pendingGauge =
+                meterRegistry.find("jobq.jobs.count").tag("status", "PENDING").gauge();
         assertThat(pendingGauge).isNotNull();
         assertThat(pendingGauge.value()).isEqualTo(10.0);
 
-        Gauge processingGauge = meterRegistry.find("jobq.jobs.count").tag("status", "PROCESSING").gauge();
+        Gauge processingGauge = meterRegistry
+                .find("jobq.jobs.count")
+                .tag("status", "PROCESSING")
+                .gauge();
         assertThat(processingGauge).isNotNull();
         assertThat(processingGauge.value()).isEqualTo(5.0);
 

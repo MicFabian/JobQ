@@ -2,6 +2,9 @@ package com.jobq;
 
 import jakarta.persistence.LockModeType;
 import jakarta.persistence.QueryHint;
+import java.time.OffsetDateTime;
+import java.util.List;
+import java.util.UUID;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Slice;
 import org.springframework.data.jpa.repository.JpaRepository;
@@ -12,10 +15,6 @@ import org.springframework.data.jpa.repository.QueryHints;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Transactional;
-
-import java.util.List;
-import java.util.UUID;
-import java.time.OffsetDateTime;
 
 @Repository
 public interface JobRepository extends JpaRepository<Job, UUID> {
@@ -64,7 +63,8 @@ public interface JobRepository extends JpaRepository<Job, UUID> {
         String getErrorMessage();
     }
 
-    @Query("""
+    @Query(
+            """
             SELECT
               j.id AS id,
               j.type AS type,
@@ -108,8 +108,9 @@ public interface JobRepository extends JpaRepository<Job, UUID> {
             Pageable pageable);
 
     @Lock(LockModeType.PESSIMISTIC_WRITE)
-    @QueryHints({ @QueryHint(name = "jakarta.persistence.lock.timeout", value = "-2") }) // SKIP LOCKED
-    @Query("""
+    @QueryHints({@QueryHint(name = "jakarta.persistence.lock.timeout", value = "-2")}) // SKIP LOCKED
+    @Query(
+            """
             SELECT j FROM Job j
             WHERE j.type = :type
               AND j.processingStartedAt IS NULL
@@ -120,7 +121,8 @@ public interface JobRepository extends JpaRepository<Job, UUID> {
             """)
     List<Job> findNextJobsForUpdate(@Param("type") String type, Pageable pageable);
 
-    @Query("""
+    @Query(
+            """
             SELECT j FROM Job j
             WHERE j.processingStartedAt IS NULL
               AND j.finishedAt IS NULL
@@ -129,7 +131,8 @@ public interface JobRepository extends JpaRepository<Job, UUID> {
     @QueryHints(@QueryHint(name = "org.hibernate.readOnly", value = "true"))
     Slice<Job> findPendingJobs(Pageable pageable);
 
-    @Query("""
+    @Query(
+            """
             SELECT
               j.id AS id,
               j.type AS type,
@@ -152,7 +155,8 @@ public interface JobRepository extends JpaRepository<Job, UUID> {
     @QueryHints(@QueryHint(name = "org.hibernate.readOnly", value = "true"))
     Slice<DashboardJobView> findPendingJobViews(Pageable pageable);
 
-    @Query("""
+    @Query(
+            """
             SELECT j FROM Job j
             WHERE j.processingStartedAt IS NOT NULL
               AND j.finishedAt IS NULL
@@ -161,7 +165,8 @@ public interface JobRepository extends JpaRepository<Job, UUID> {
     @QueryHints(@QueryHint(name = "org.hibernate.readOnly", value = "true"))
     Slice<Job> findProcessingJobs(Pageable pageable);
 
-    @Query("""
+    @Query(
+            """
             SELECT
               j.id AS id,
               j.type AS type,
@@ -188,7 +193,8 @@ public interface JobRepository extends JpaRepository<Job, UUID> {
     @QueryHints(@QueryHint(name = "org.hibernate.readOnly", value = "true"))
     Slice<Job> findCompletedJobs(Pageable pageable);
 
-    @Query("""
+    @Query(
+            """
             SELECT
               j.id AS id,
               j.type AS type,
@@ -213,7 +219,8 @@ public interface JobRepository extends JpaRepository<Job, UUID> {
     @QueryHints(@QueryHint(name = "org.hibernate.readOnly", value = "true"))
     Slice<Job> findFailedJobs(Pageable pageable);
 
-    @Query("""
+    @Query(
+            """
             SELECT
               j.id AS id,
               j.type AS type,
@@ -238,7 +245,8 @@ public interface JobRepository extends JpaRepository<Job, UUID> {
     @QueryHints(@QueryHint(name = "org.hibernate.readOnly", value = "true"))
     Slice<Job> findAllJobs(Pageable pageable);
 
-    @Query("""
+    @Query(
+            """
             SELECT
               j.id AS id,
               j.type AS type,
@@ -258,7 +266,8 @@ public interface JobRepository extends JpaRepository<Job, UUID> {
     @QueryHints(@QueryHint(name = "org.hibernate.readOnly", value = "true"))
     Slice<DashboardJobView> findAllJobViews(Pageable pageable);
 
-    @Query("""
+    @Query(
+            """
             SELECT COUNT(j) FROM Job j
             WHERE j.processingStartedAt IS NULL
               AND j.finishedAt IS NULL
@@ -266,7 +275,8 @@ public interface JobRepository extends JpaRepository<Job, UUID> {
             """)
     long countPendingJobs();
 
-    @Query("""
+    @Query(
+            """
             SELECT COUNT(j) FROM Job j
             WHERE j.processingStartedAt IS NOT NULL
               AND j.finishedAt IS NULL
@@ -280,7 +290,8 @@ public interface JobRepository extends JpaRepository<Job, UUID> {
     @Query("SELECT COUNT(j) FROM Job j WHERE j.failedAt IS NOT NULL")
     long countFailedJobs();
 
-    @Query("""
+    @Query(
+            """
             SELECT
               COALESCE(SUM(CASE
                 WHEN j.processingStartedAt IS NULL AND j.finishedAt IS NULL AND j.failedAt IS NULL
@@ -307,7 +318,8 @@ public interface JobRepository extends JpaRepository<Job, UUID> {
     int deleteByFailedAtBefore(OffsetDateTime failedAt);
 
     @Modifying
-    @Query("""
+    @Query(
+            """
             UPDATE Job j
             SET j.processingStartedAt = COALESCE(j.processingStartedAt, :now),
                 j.finishedAt = :now,
@@ -326,7 +338,8 @@ public interface JobRepository extends JpaRepository<Job, UUID> {
     int markCompleted(@Param("id") UUID id, @Param("now") OffsetDateTime now, @Param("lockedBy") String lockedBy);
 
     @Modifying
-    @Query("""
+    @Query(
+            """
             UPDATE Job j
             SET j.retryCount = :nextRetryCount,
                 j.errorMessage = :errorMessage,
@@ -353,7 +366,8 @@ public interface JobRepository extends JpaRepository<Job, UUID> {
             @Param("lockedBy") String lockedBy);
 
     @Modifying
-    @Query("""
+    @Query(
+            """
             UPDATE Job j
             SET j.retryCount = :nextRetryCount,
                 j.errorMessage = :errorMessage,

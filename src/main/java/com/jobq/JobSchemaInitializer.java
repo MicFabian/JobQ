@@ -1,21 +1,6 @@
 package com.jobq;
 
 import com.jobq.config.JobQProperties;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.InitializingBean;
-import org.springframework.beans.factory.ObjectProvider;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
-import org.springframework.core.io.ByteArrayResource;
-import org.springframework.core.io.Resource;
-import org.springframework.core.env.Environment;
-import org.springframework.core.io.support.EncodedResource;
-import org.springframework.core.io.support.PathMatchingResourcePatternResolver;
-import org.springframework.jdbc.datasource.init.ScriptUtils;
-import org.springframework.stereotype.Component;
-import org.springframework.util.StreamUtils;
-
-import javax.sql.DataSource;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -34,6 +19,20 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import javax.sql.DataSource;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.InitializingBean;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.core.env.Environment;
+import org.springframework.core.io.ByteArrayResource;
+import org.springframework.core.io.Resource;
+import org.springframework.core.io.support.EncodedResource;
+import org.springframework.core.io.support.PathMatchingResourcePatternResolver;
+import org.springframework.jdbc.datasource.init.ScriptUtils;
+import org.springframework.stereotype.Component;
+import org.springframework.util.StreamUtils;
 
 @Component
 @ConditionalOnProperty(prefix = "jobq.database", name = "skip-create", havingValue = "false", matchIfMissing = true)
@@ -41,7 +40,8 @@ public class JobSchemaInitializer implements InitializingBean {
 
     private static final Logger log = LoggerFactory.getLogger(JobSchemaInitializer.class);
     private static final Pattern SAFE_IDENTIFIER = Pattern.compile("[A-Za-z_][A-Za-z0-9_]*");
-    private static final Pattern VERSION_FILE_PATTERN = Pattern.compile("^V([0-9]+(?:_[0-9]+)*)__([A-Za-z0-9_\\-]+)\\.sql$");
+    private static final Pattern VERSION_FILE_PATTERN =
+            Pattern.compile("^V([0-9]+(?:_[0-9]+)*)__([A-Za-z0-9_\\-]+)\\.sql$");
     private static final String MIGRATION_RESOURCE_PATTERN = "classpath*:jobq/migration/V*__*.sql";
     private static final long POSTGRES_ADVISORY_LOCK_KEY = 8_244_786_782_168_701_501L;
 
@@ -51,9 +51,7 @@ public class JobSchemaInitializer implements InitializingBean {
     private final boolean failOnMigrationError;
 
     public JobSchemaInitializer(
-            DataSource dataSource,
-            ObjectProvider<JobQProperties> propertiesProvider,
-            Environment environment) {
+            DataSource dataSource, ObjectProvider<JobQProperties> propertiesProvider, Environment environment) {
         this.dataSource = dataSource;
         JobQProperties properties = propertiesProvider.getIfAvailable();
         String configuredPrefix = properties != null
@@ -85,7 +83,8 @@ public class JobSchemaInitializer implements InitializingBean {
 
                 Map<String, AppliedMigration> appliedMigrations = loadAppliedMigrations(connection, migrationTable);
                 validateChecksums(migrations, appliedMigrations);
-                int appliedNow = applyPendingMigrations(connection, migrationTable, jobsTable, migrations, appliedMigrations);
+                int appliedNow =
+                        applyPendingMigrations(connection, migrationTable, jobsTable, migrations, appliedMigrations);
 
                 if (appliedNow == 0) {
                     log.info("JobQ schema is up to date. {} migration(s) already applied.", appliedMigrations.size());
@@ -105,7 +104,8 @@ public class JobSchemaInitializer implements InitializingBean {
     }
 
     private void ensureMigrationTable(Connection connection, String migrationTable) throws SQLException {
-        String sql = """
+        String sql =
+                """
                 CREATE TABLE IF NOT EXISTS %s (
                     version VARCHAR(64) PRIMARY KEY,
                     description VARCHAR(255) NOT NULL,
@@ -113,7 +113,8 @@ public class JobSchemaInitializer implements InitializingBean {
                     installed_on TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     execution_time_ms BIGINT NOT NULL
                 )
-                """.formatted(migrationTable);
+                """
+                        .formatted(migrationTable);
         try (Statement statement = connection.createStatement()) {
             statement.execute(sql);
         }
@@ -130,8 +131,8 @@ public class JobSchemaInitializer implements InitializingBean {
             }
             Matcher matcher = VERSION_FILE_PATTERN.matcher(fileName);
             if (!matcher.matches()) {
-                throw new IllegalStateException(
-                        "Invalid JobQ migration filename '" + fileName + "'. Expected format: V{version}__{description}.sql");
+                throw new IllegalStateException("Invalid JobQ migration filename '" + fileName
+                        + "'. Expected format: V{version}__{description}.sql");
             }
 
             String version = matcher.group(1);
@@ -168,9 +169,8 @@ public class JobSchemaInitializer implements InitializingBean {
         }
         for (AppliedMigration appliedMigration : appliedMigrations.values()) {
             if (!scriptsByVersion.containsKey(appliedMigration.version())) {
-                throw new IllegalStateException(
-                        "Migration V" + appliedMigration.version()
-                                + " was applied in the database but is missing from the classpath.");
+                throw new IllegalStateException("Migration V" + appliedMigration.version()
+                        + " was applied in the database but is missing from the classpath.");
             }
         }
 
@@ -180,9 +180,8 @@ public class JobSchemaInitializer implements InitializingBean {
                 continue;
             }
             if (!migration.checksum().equals(applied.checksum())) {
-                throw new IllegalStateException(
-                        "Checksum mismatch for migration V" + migration.version()
-                                + ". The migration file changed after being applied.");
+                throw new IllegalStateException("Checksum mismatch for migration V" + migration.version()
+                        + ". The migration file changed after being applied.");
             }
         }
     }
@@ -204,7 +203,8 @@ public class JobSchemaInitializer implements InitializingBean {
         return appliedCount;
     }
 
-    private void applyMigration(Connection connection, String migrationTable, String jobsTable, MigrationScript migration) {
+    private void applyMigration(
+            Connection connection, String migrationTable, String jobsTable, MigrationScript migration) {
         boolean originalAutoCommit = true;
         long started = System.nanoTime();
         try {
@@ -228,7 +228,11 @@ public class JobSchemaInitializer implements InitializingBean {
                 statement.executeUpdate();
             }
             connection.commit();
-            log.info("Applied JobQ migration V{} ({}) in {} ms", migration.version(), migration.description(), executionMs);
+            log.info(
+                    "Applied JobQ migration V{} ({}) in {} ms",
+                    migration.version(),
+                    migration.description(),
+                    executionMs);
         } catch (Exception e) {
             try {
                 connection.rollback();
@@ -250,9 +254,7 @@ public class JobSchemaInitializer implements InitializingBean {
         if (tablePrefix.isEmpty()) {
             return sql;
         }
-        return sql
-                .replace("jobq_jobs", jobsTable)
-                .replace("idx_jobq_jobs_", tablePrefix + "idx_jobq_jobs_");
+        return sql.replace("jobq_jobs", jobsTable).replace("idx_jobq_jobs_", tablePrefix + "idx_jobq_jobs_");
     }
 
     private boolean acquireLockIfPostgres(Connection connection) {
@@ -344,9 +346,8 @@ public class JobSchemaInitializer implements InitializingBean {
         for (MigrationScript script : scripts) {
             String previousFile = firstFileByVersion.putIfAbsent(script.version(), script.fileName());
             if (previousFile != null) {
-                throw new IllegalStateException(
-                        "Duplicate JobQ migration version V" + script.version() + " in files " + previousFile
-                                + " and " + script.fileName());
+                throw new IllegalStateException("Duplicate JobQ migration version V" + script.version() + " in files "
+                        + previousFile + " and " + script.fileName());
             }
         }
     }
@@ -357,9 +358,7 @@ public class JobSchemaInitializer implements InitializingBean {
             String description,
             String fileName,
             String sql,
-            String checksum) {
-    }
+            String checksum) {}
 
-    private record AppliedMigration(String version, String checksum) {
-    }
+    private record AppliedMigration(String version, String checksum) {}
 }

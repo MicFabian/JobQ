@@ -2,64 +2,45 @@
 
 JobQ is a PostgreSQL-backed background job library for Spring Boot.
 
-It is designed for teams that want transactional job enqueueing, high concurrency, and operational simplicity without running a separate message broker.
+It is built for teams that want transactional background processing without running a separate broker.
+If your business write and job enqueue must succeed or fail together, JobQ is designed for that path.
 
-## Highlights
+## Why JobQ
 
-- Transactional enqueueing in the same DB transaction as business writes
-- Concurrent polling using `FOR UPDATE SKIP LOCKED`
-- Retry handling with backoff and priority shift strategies
-- Recurring jobs via cron on `@Job`
-- Initial enqueue delay via `@Job(initialDelayMs = ...)`
-- Optional job type auto-resolution from `@Job` (no `getJobType()` boilerplate)
-- Annotation-driven jobs with `@Job(payload = ...)` (no interface required)
-- Optional payload type auto-resolution from `JobWorker<T>` when using the interface
-- Optional `onError(...)` hook per job
-- Optional `onSuccess(...)` / `after(...)` hook per job
-- Explicit schedule-at enqueue APIs (`enqueueAt(..., Instant/OffsetDateTime)`)
-- Job grouping (`groupId`) and deduplication (`replaceKey`)
-- Built-in HTMX dashboard (status, payload inspection, retry actions, failed/retry insights)
-- Dashboard filters and sorting (status/search/scheduled-only/retried-only/page-size/run-time sorting)
-- Dashboard/metrics lifecycle counters fetched via single aggregated query
-- Built-in Micrometer gauges
-- Automatic retention cleanup for completed/failed jobs
-- Java 25 and Spring Boot 4 support
+- Transactional enqueue inside your existing DB transaction
+- PostgreSQL concurrency via `FOR UPDATE SKIP LOCKED`
+- Built-in retries, backoff, priority shifting, and expected-exception completion
+- Recurring jobs via `cron` on `@Job`
+- Delayed and explicit-time scheduling (`initialDelayMs`, `enqueueAt`)
+- Deduplication via `replaceKey` with configurable run-at replacement behavior
+- Built-in HTMX dashboard (filters, sorting, retry/rerun actions, details)
+- Optional Micrometer metrics with zero hard dependency on actuator/micrometer
+- Built-in schema migration mechanism for starter upgrades
 
-## Requirements
+## Compatibility
 
 - Java 25
-- Spring Boot 4
+- Spring Boot 4.x
 - PostgreSQL 17+
 
 ## Installation
 
+Use the latest release on Maven Central.
+
+### Gradle
+
 ```groovy
-implementation 'io.github.micfabian:jobq-spring-boot-starter:0.0.2'
+implementation 'io.github.micfabian:jobq-spring-boot-starter:<latest-version>'
 ```
 
-## Configuration
+### Maven
 
-```yaml
-jobq:
-  background-job-server:
-    enabled: true
-    worker-count: 4
-    poll-interval-in-seconds: 15
-    delete-succeeded-jobs-after: 36h
-    permanently-delete-deleted-jobs-after: 72h
-
-  database:
-    skip-create: false            # true = disable built-in JobQ migrations
-    fail-on-migration-error: true # fail startup when migration execution fails
-    table-prefix: ""
-
-  dashboard:
-    enabled: false
-    path: "/jobq/dashboard"
-    auth-mode: BASIC              # BASIC | SPRING_SECURITY
-    required-role: JOBQ_DASHBOARD # used only in SPRING_SECURITY mode
-    username: ""                  # used only in BASIC mode
-    password: ""                  # used only in BASIC mode
+```xml
+<dependency>
+  <groupId>io.github.micfabian</groupId>
+  <artifactId>jobq-spring-boot-starter</artifactId>
+  <version><!-- latest --></version>
+</dependency>
 ```
 
 ## Quick Start
@@ -67,10 +48,10 @@ jobq:
 ### 1. Define payload
 
 ```java
-public record WelcomeEmailPayload(String email, String template) {}
+public record WelcomeEmailPayload(String email, java.time.Instant requestedAt) {}
 ```
 
-### 2. Implement job
+### 2. Define a job
 
 ```java
 import com.jobq.annotation.Job;
@@ -79,7 +60,7 @@ import org.springframework.stereotype.Component;
 import java.util.UUID;
 
 @Component
-@Job(value = "send-welcome-email", payload = WelcomeEmailPayload.class)
+@Job(payload = WelcomeEmailPayload.class) // value omitted => job type defaults to fully-qualified class name
 public class WelcomeEmailJob {
 
     public void process(UUID jobId, WelcomeEmailPayload payload) {
@@ -87,57 +68,20 @@ public class WelcomeEmailJob {
     }
 
     public void onError(UUID jobId, WelcomeEmailPayload payload, Exception exception) {
-        // optional: called when process(...) throws
+        // optional
     }
 
     public void onSuccess(UUID jobId, WelcomeEmailPayload payload) {
-        // optional: called after successful completion
+        // optional
+    }
+
+    public void after(UUID jobId, WelcomeEmailPayload payload) {
+        // optional, runs for both success/failure
     }
 }
 ```
 
-For annotation-only jobs, the job type comes from `@Job(value = "...")`.
-`JobWorker` is optional. If you use `JobWorker<T>`, `getJobType()` and `getPayloadClass()` are optional and inferred.
-For `JobWorker<T>`, you can override `onSuccess(...)` and/or `after(...)`.
-
-Supported annotation-driven `process` signatures:
-
-- `process()`
-- `process(UUID jobId)`
-- `process(Payload payload)`
-- `process(UUID jobId, Payload payload)`
-
-Supported annotation-driven `onError` signatures:
-
-- `onError(Exception e)`
-- `onError(UUID jobId, Exception e)`
-- `onError(Payload payload, Exception e)`
-- `onError(UUID jobId, Payload payload, Exception e)`
-
-If `onError(...)` throws, JobQ logs that callback failure and continues normal retry/failure handling using the original processing exception.
-
-Supported annotation-driven `onSuccess` signatures:
-
-- `onSuccess()`
-- `onSuccess(UUID jobId)`
-- `onSuccess(Payload payload)`
-- `onSuccess(UUID jobId, Payload payload)`
-
-`onSuccess(...)` is called only when the job finishes successfully.
-
-If a success callback throws, JobQ logs it and keeps the job in `COMPLETED` state.
-
-Supported annotation-driven `after` signatures:
-
-- `after()`
-- `after(UUID jobId)`
-- `after(Payload payload)`
-- `after(UUID jobId, Payload payload)`
-
-`after(...)` is called after job execution regardless of success or failure.
-If `after(...)` throws, JobQ logs it and keeps the persisted job outcome unchanged.
-
-### 3. Enqueue inside a transaction
+### 3. Enqueue transactionally
 
 ```java
 import com.jobq.JobClient;
@@ -147,162 +91,234 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 public class UserService {
 
+    private final AppUserRepository appUserRepository;
     private final JobClient jobClient;
 
-    public UserService(JobClient jobClient) {
+    public UserService(AppUserRepository appUserRepository, JobClient jobClient) {
+        this.appUserRepository = appUserRepository;
         this.jobClient = jobClient;
     }
 
     @Transactional
     public void register(String email) {
-        // save business data...
-        jobClient.enqueue("send-welcome-email", new WelcomeEmailPayload(email, "default"));
+        appUserRepository.save(new AppUser(email));
+        jobClient.enqueue(WelcomeEmailJob.class, new WelcomeEmailPayload(email, java.time.Instant.now()));
     }
 }
 ```
 
 If the transaction rolls back, the job is not persisted.
+The starter auto-registers JobQ JPA packages, so no extra `@EntityScan` / `@EnableJpaRepositories` is required.
 
-JobQ auto-registers its own JPA entity/repository package (`com.jobq`) without requiring app-side `@EntityScan`/`@EnableJpaRepositories` changes.
+## Job Type Resolution
 
-## Schema Migrations
+JobQ resolves job type in this order:
 
-By default, JobQ runs versioned SQL migrations at startup from:
+1. Explicit `@Job(value = "...")` when provided
+2. Otherwise, fully-qualified job class name
 
-- `classpath:jobq/migration/V{version}__{description}.sql`
+This applies to both annotation-driven jobs and `JobWorker<T>` default type inference.
 
-Behavior:
+Use explicit `value` for stable external IDs across class/package renames.
 
-- migration history is stored in `jobq_schema_migrations`
-- applied script checksums are validated on startup
-- only pending versions are executed
-- Postgres advisory lock is used so only one node migrates at a time
+## Defining Jobs
 
-Disable built-in migrations when your project manages DDL externally:
+You can define jobs in two styles.
 
-```yaml
-jobq:
-  database:
-    skip-create: true
+### Annotation-Driven Class (No Interface Required)
+
+- Requires `@Job` on the bean class
+- `payload` can be explicit (`@Job(payload = ...)`) or inferred from `process(...)`
+
+Supported `process(...)` signatures:
+
+- `process()`
+- `process(UUID jobId)`
+- `process(Payload payload)`
+- `process(UUID jobId, Payload payload)`
+
+Supported annotation-driven `onError(...)` signatures:
+
+- `onError(Exception e)`
+- `onError(Throwable e)`
+- `onError(UUID jobId, Exception e)`
+- `onError(UUID jobId, Throwable e)`
+- `onError(Payload payload, Exception e)`
+- `onError(Payload payload, Throwable e)`
+- `onError(UUID jobId, Payload payload, Exception e)`
+- `onError(UUID jobId, Payload payload, Throwable e)`
+
+Supported annotation-driven `onSuccess(...)` and `after(...)` signatures:
+
+- `onSuccess()` / `after()`
+- `onSuccess(UUID jobId)` / `after(UUID jobId)`
+- `onSuccess(Payload payload)` / `after(Payload payload)`
+- `onSuccess(UUID jobId, Payload payload)` / `after(UUID jobId, Payload payload)`
+
+### `JobWorker<T>` Interface
+
+```java
+import com.jobq.JobWorker;
+import com.jobq.annotation.Job;
+import org.springframework.stereotype.Component;
+
+import java.util.UUID;
+
+@Component
+@Job // value omitted => type = class name
+public class WelcomeEmailWorker implements JobWorker<WelcomeEmailPayload> {
+
+    @Override
+    public void process(UUID jobId, WelcomeEmailPayload payload) {
+        // business logic
+    }
+
+    // getPayloadClass() is inferred from JobWorker<WelcomeEmailPayload>
+    // getJobType() is inferred from @Job (value or class name fallback)
+}
 ```
 
-If you want startup to continue on migration failure (not recommended):
+`JobWorker<T>` also supports optional callback overrides:
 
-```yaml
-jobq:
-  database:
-    fail-on-migration-error: false
+- `onError(UUID, T, Exception)`
+- `onSuccess(UUID, T)`
+- `after(UUID, T)`
+
+## Enqueue APIs
+
+Both type-safe class-based and string-based APIs are available.
+
+### Common methods
+
+```java
+// default retries (resolved from @Job maxRetries when available)
+jobClient.enqueue(MyJob.class, payload);
+jobClient.enqueue("MY_JOB_TYPE", payload);
+
+// explicit retries
+jobClient.enqueue(MyJob.class, payload, 5);
+
+// group + dedup key
+jobClient.enqueue(MyJob.class, payload, "reports", "customer-123");
+
+// explicit run time
+jobClient.enqueueAt(MyJob.class, payload, java.time.Instant.now().plusSeconds(90));
+jobClient.enqueueAt(MyJob.class, payload, java.time.OffsetDateTime.now().plusMinutes(2));
 ```
 
-## Retry, Backoff, Priority
+### Default retries behavior
+
+When calling default enqueue methods (without explicit retries):
+
+- If JobQ has metadata for the job type (`@Job`), it uses `@Job(maxRetries = ...)`
+- Otherwise, it falls back to `jobq.jobs.default-number-of-retries` (default `10`)
+
+## Reliability, Retries, and Failure Semantics
+
+### State model
+
+Job status is derived from lifecycle timestamps:
+
+- `PENDING`: `processing_started_at IS NULL`, `finished_at IS NULL`, `failed_at IS NULL`
+- `PROCESSING`: `processing_started_at IS NOT NULL`, `finished_at IS NULL`, `failed_at IS NULL`
+- `COMPLETED`: `finished_at IS NOT NULL`
+- `FAILED`: `failed_at IS NOT NULL`
+
+### Retry behavior
+
+On a non-expected exception in `process(...)`:
+
+- `retry_count` is incremented
+- if `retry_count <= max_retries`, job returns to `PENDING` with computed backoff
+- if `retry_count > max_retries`, job is marked `FAILED`
+
+Backoff and retry priority can be configured via `@Job`:
 
 ```java
 @Job(
-    value = "sync-customer",
     maxRetries = 5,
-    initialBackoffMs = 1000,
+    initialBackoffMs = 1_000,
     backoffMultiplier = 2.0,
     retryPriority = Job.RetryPriority.LOWER_ON_RETRY
 )
 ```
 
-When processing throws a non-whitelisted exception:
-
-- `retryCount` is incremented
-- job is moved back to `PENDING` with backoff (until retries are exhausted)
-- job becomes `FAILED` when retries are exceeded
-
-## Expected Exceptions (Whitelist)
-
-If a job throws an exception that represents an expected business outcome, whitelist it in `@Job`.
+### Expected exception whitelist
 
 ```java
-@Job(
-    value = "sync-customer",
-    expectedExceptions = {CustomerAlreadySyncedException.class}
-)
+@Job(expectedExceptions = {CustomerAlreadySyncedException.class})
 ```
 
-If one of these exceptions is thrown:
+If thrown exception (or one of its causes) matches the whitelist:
 
 - job is marked `COMPLETED`
-- `retryCount` is not incremented
 - no retry is scheduled
+- `onSuccess(...)` is still invoked
 
-## Recurring Jobs
+### Callback safety
+
+- `onError(...)` exceptions are logged and do not replace original failure handling
+- `onSuccess(...)` exceptions are logged and do not change completion state
+- `after(...)` exceptions are logged and do not alter persisted outcome
+
+## Scheduling
+
+### Initial delay
 
 ```java
-@Job(value = "cleanup-temp-files", cron = "0 0 * * * *")
+@Job(initialDelayMs = 300_000) // 5 minutes
+class SyncCustomerJob { ... }
+```
+
+If enqueue is called without explicit run time, `run_at` = now + initial delay.
+
+### Explicit scheduling
+
+`enqueueAt(...)` sets `run_at` explicitly and overrides `initialDelayMs` for that enqueue call.
+
+### Recurring jobs
+
+```java
+@Job(cron = "0 */5 * * * *")
+class CleanupJob { ... }
 ```
 
 Behavior:
 
-- On startup, JobQ bootstraps recurring jobs if no active execution exists
-- After a successful run, JobQ schedules the next run from the cron expression
+- On startup, JobQ ensures one active execution exists for each recurring definition
+- On successful completion, JobQ schedules the next run from cron expression
 
-## Initial Delay and Scheduled Enqueue
+## Deduplication and Grouping
 
-Use annotation-level initial delay for regular enqueue calls:
+### Grouping (`groupId`)
 
-```java
-@Job(value = "sync-customer", initialDelayMs = 300_000) // 5 minutes
-```
-
-Then:
-
-```java
-jobClient.enqueue("sync-customer", payload);
-```
-
-The job is persisted immediately, but will not be picked up until `run_at`.
-
-To set an explicit execution instant at enqueue time:
-
-```java
-jobClient.enqueueAt("sync-customer", payload, java.time.Instant.now().plusSeconds(90));
-// or
-jobClient.enqueueAt("sync-customer", payload, java.time.OffsetDateTime.now().plusMinutes(2));
-```
-
-Explicit `enqueueAt(...)` overrides `@Job(initialDelayMs = ...)` for that enqueue call.
-
-## Grouping and Deduplication
-
-### Grouping
-
-```java
-jobClient.enqueue("generate-report", payload, "reports");
-```
+`groupId` is persisted and visible in the dashboard for routing/filtering use cases.
 
 ### Deduplication (`replaceKey`)
 
 ```java
-jobClient.enqueue("generate-report", payload, "reports", "customer-123");
+jobClient.enqueue(MyJob.class, payload, "reports", "customer-123");
 ```
 
-If a `PENDING` job exists with the same `(type, replaceKey)`, JobQ deduplicates against that row instead of creating another.
+Dedup applies only to active pending rows (`processing_started_at IS NULL`, `finished_at IS NULL`, `failed_at IS NULL`).
 
-- If the matching row is `PENDING`, payload/group/retry settings are replaced.
-- If the matching row is already `PROCESSING`, JobQ creates a new row.
+- If matching pending row exists, JobQ updates that row and returns its ID
+- If matching row is already processing/terminal, JobQ inserts a new row
 
-You can configure how dedup replacement handles the scheduled `runAt`:
+When replacing a pending row, `run_at` behavior is controlled by:
 
 ```java
-@Job(
-    value = "generate-report",
-    initialDelayMs = 300_000,
-    deduplicationRunAtPolicy = Job.DeduplicationRunAtPolicy.KEEP_EXISTING
-)
+@Job(deduplicationRunAtPolicy = Job.DeduplicationRunAtPolicy.KEEP_EXISTING)
 ```
 
-Policies:
+Options:
 
-- `UPDATE_ON_REPLACE` (default): replacement recomputes `runAt` (including initial delay / explicit `enqueueAt` run time)
-- `KEEP_EXISTING`: replacement keeps the existing row's `runAt`
+- `UPDATE_ON_REPLACE` (default)
+- `KEEP_EXISTING`
 
 ## Dashboard
 
-Enable with:
+Enable dashboard:
 
 ```yaml
 jobq:
@@ -310,45 +326,34 @@ jobq:
     enabled: true
 ```
 
-Default route: `/jobq/dashboard` (configurable with `jobq.dashboard.path`).
+Default path: `/jobq/dashboard` (configurable).
 
-Features:
+### Features
 
-- live stats
-- paged job listing
-- text search filter (job type/group/replace key/full UUID)
-- status dropdown + stat-card status filtering
-- sorting options (newest/oldest/run-time/priority/retries/type/failed time)
-- scheduled-only and retried-only filters with adjustable page size
-- manual refresh, clear filters, and auto-refresh toggle
-- failure information (failed time + error summary) in list view
-- quick retry button for failed jobs directly in the list
-- payload/details view
-- retry failed jobs and rerun completed jobs from list/details panel
-- optimized list rendering: projection-only reads (payload JSON not loaded for table rows)
-- reduced polling overhead: hidden-tab polling is skipped, pagination updates piggyback on jobs refresh
+- Live lifecycle cards and paged job table
+- Search (type/group/replace key/full UUID)
+- Status filter, sorting, page-size control
+- Scheduled-only and retried-only filters
+- Silent polling with optional auto-refresh toggle
+- Reliability column (`retryCount / maxRetries`)
+- Failure details preview in list + full detail panel
+- Retry failed jobs and rerun completed jobs
 
-### Dashboard Security (Never Open)
+### Security modes
 
-JobQ dashboard endpoints are always protected when dashboard is enabled.
+Dashboard is never open when enabled.
 
-#### Mode 1: `BASIC` (default)
+#### `BASIC` (default)
 
-- If both `jobq.dashboard.username` and `jobq.dashboard.password` are set:
-  - those credentials are used
-  - no startup credential log is emitted
-- If either is missing:
-  - JobQ generates random username/password at startup
-  - generated credentials are logged once at startup
+- If `username` + `password` are set, those credentials are required
+- If both are set, no generated credentials are logged
+- If either is missing, JobQ generates random credentials at startup and logs them once
 
-#### Mode 2: `SPRING_SECURITY`
+#### `SPRING_SECURITY`
 
-- JobQ does not use Basic Auth credentials in this mode
-- Request must be authenticated by your project’s Spring Security setup
-- Authenticated user must have `jobq.dashboard.required-role` (default: `JOBQ_DASHBOARD`)
-  - role value may be configured with or without `ROLE_` prefix
-
-Example:
+- JobQ Basic Auth is bypassed
+- Your Spring Security authentication is used
+- Access requires `jobq.dashboard.required-role` (default `JOBQ_DASHBOARD`)
 
 ```yaml
 jobq:
@@ -358,129 +363,101 @@ jobq:
     required-role: JOBQ_DASHBOARD
 ```
 
-In this mode, no credentials are auto-generated or logged by JobQ.
-
 ## Metrics
 
-When Micrometer is on the classpath, JobQ registers:
+If Micrometer is available, JobQ registers:
 
 - `jobq.jobs.total`
 - `jobq.jobs.count{status="PENDING|PROCESSING|COMPLETED|FAILED"}`
 
-If Micrometer is not present, JobQ starts normally and simply skips metrics bean registration.
+If Micrometer is absent, JobQ still starts normally.
 
-## Load Testing
+## Configuration Reference
 
-JobQ includes dedicated load/stress tests against PostgreSQL Testcontainers.
+```yaml
+jobq:
+  jobs:
+    default-number-of-retries: 10
+    retry-back-off-time-seed: 3
 
-Run only load tests:
+  background-job-server:
+    enabled: true
+    worker-count: 4
+    poll-interval-in-seconds: 15
+    delete-succeeded-jobs-after: 36h
+    permanently-delete-deleted-jobs-after: 72h
 
-```bash
-./gradlew loadTest
+  database:
+    table-prefix: ""
+    skip-create: false
+    fail-on-migration-error: true
+
+  dashboard:
+    enabled: false
+    path: /jobq/dashboard
+    auth-mode: BASIC               # BASIC | SPRING_SECURITY
+    required-role: JOBQ_DASHBOARD  # SPRING_SECURITY mode
+    username: ""                  # BASIC mode
+    password: ""                  # BASIC mode
 ```
 
-Run performance benchmark tests:
+## Schema and Migrations
+
+JobQ includes built-in versioned SQL migrations from:
+
+- `classpath:jobq/migration/V{version}__{description}.sql`
+
+Migration behavior:
+
+- history table: `jobq_schema_migrations` (prefix-aware)
+- checksum validation on startup
+- pending versions are applied in order
+- PostgreSQL advisory lock to avoid multi-node race during migration
+
+Main job table: `jobq_jobs` (prefix-aware).
+
+Disable built-in migrations if your platform manages DDL externally:
+
+```yaml
+jobq:
+  database:
+    skip-create: true
+```
+
+Continue startup even if migration fails (not recommended):
+
+```yaml
+jobq:
+  database:
+    fail-on-migration-error: false
+```
+
+## Testing and Performance Tasks
 
 ```bash
+./gradlew test
+./gradlew loadTest
 ./gradlew perfTest
 ```
 
-Scenarios covered:
+- `loadTest`: stress scenarios (concurrency, dedup contention, retries)
+- `perfTest`: benchmark-oriented throughput/timing scenarios
 
-- high-volume concurrent enqueue + processing (data-loss and failure checks)
-- high-contention dedup with `replaceKey`
-- mixed retry/exponential-error handling + expected-exception completion paths
-- scheduled `runAt` execution at scale
-- dedicated enqueue and end-to-end throughput benchmarks with timing output
+## Publishing (Maintainers)
 
-## Publishing to Maven Central
-
-Publish release:
+Release:
 
 ```bash
-./gradlew publishToMavenCentral -PreleaseVersion=0.0.2
+./gradlew publishToMavenCentral -PreleaseVersion=<version>
 ```
 
-Publish snapshot:
+Snapshot:
 
 ```bash
-./gradlew publishToMavenCentral -PreleaseVersion=0.0.3-SNAPSHOT
+./gradlew publishToMavenCentral -PreleaseVersion=<version>-SNAPSHOT
 ```
 
-Supported publishing-related Gradle properties:
+GitHub Actions:
 
-- `releaseVersion` (overrides project version)
-- `sonatypeUsername`
-- `sonatypePassword`
-- `signingKey`
-- `signingPassword`
-
-If Sonatype fails closing staging due missing public key fingerprint resolution, upload your public key to supported key servers and retry after propagation.
-
-## GitHub Actions (CI + Release)
-
-### CI workflow
-
-`.github/workflows/ci.yml`:
-
-- runs on pull requests
-- runs on pushes to `main`
-- validates Gradle wrapper
-- runs `./gradlew --no-daemon test`
-
-### Release workflow
-
-`.github/workflows/release.yml`:
-
-- runs on tag push `v*` (example `v0.0.2`)
-- can also run manually (`workflow_dispatch`) with `version`
-- validates version format
-- runs `./gradlew --no-daemon clean test -PreleaseVersion=<version>`
-- publishes with `./gradlew --no-daemon publishToMavenCentral -PreleaseVersion=<version>`
-
-Required repository secrets:
-
-- `SONATYPE_USERNAME`
-- `SONATYPE_PASSWORD`
-- `SIGNING_KEY`
-- `SIGNING_PASSWORD`
-
-Trigger release by tag:
-
-```bash
-git tag -a v0.0.2 -m "Release 0.0.2"
-git push origin v0.0.2
-```
-
-Or trigger manual release:
-
-```bash
-gh workflow run Release --ref main -f version=0.0.2
-```
-
-## Schema
-
-Main table: `jobq_jobs`  
-Migration history table: `jobq_schema_migrations`
-
-Important columns:
-
-- `processing_started_at`, `finished_at`, `failed_at`
-- `retry_count`, `max_retries`, `priority`, `run_at`
-- `group_id`, `replace_key`, `cron`
-
-Important indexes:
-
-- polling index for efficient lock/poll
-- group index
-- unique partial index on `(type, replace_key)` for pending rows
-- status/listing indexes on `created_at` for dashboard pagination
-- cleanup indexes on `finished_at` and `failed_at` for retention deletes
-
-Migration scripts live in `src/main/resources/jobq/migration` and are applied in version order (`V1__...`, `V2__...`, `V2_1__...`).
-
-## Design Notes
-
-- No external broker required
-- Works well with multiple app instances
-- Uses DB-level locking primitives for safe concurrent processors
+- CI: `.github/workflows/ci.yml` (`test` on push/PR)
+- Release: `.github/workflows/release.yml` (tag/manual publish flow)

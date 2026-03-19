@@ -1,34 +1,5 @@
 package com.jobq.dashboard;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.jobq.Job;
-import com.jobq.JobRepository;
-import com.jobq.TestApplication;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.test.context.ActiveProfiles;
-import org.springframework.test.context.DynamicPropertyRegistry;
-import org.springframework.test.context.DynamicPropertySource;
-import org.springframework.test.web.servlet.MockMvc;
-import org.springframework.web.context.WebApplicationContext;
-import org.springframework.test.web.servlet.setup.MockMvcBuilders;
-import org.testcontainers.containers.PostgreSQLContainer;
-import org.testcontainers.junit.jupiter.Container;
-import org.testcontainers.junit.jupiter.Testcontainers;
-
-import java.nio.charset.StandardCharsets;
-import java.time.OffsetDateTime;
-import java.util.ArrayList;
-import java.util.Base64;
-import java.util.List;
-import java.util.Map;
-import java.util.UUID;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
-
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -41,13 +12,41 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.jobq.Job;
+import com.jobq.JobRepository;
+import com.jobq.TestApplication;
+import java.nio.charset.StandardCharsets;
+import java.time.OffsetDateTime;
+import java.util.ArrayList;
+import java.util.Base64;
+import java.util.List;
+import java.util.Map;
+import java.util.UUID;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.test.context.ActiveProfiles;
+import org.springframework.test.context.DynamicPropertyRegistry;
+import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.setup.MockMvcBuilders;
+import org.springframework.web.context.WebApplicationContext;
+import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.junit.jupiter.Container;
+import org.testcontainers.junit.jupiter.Testcontainers;
+
 @SpringBootTest(
         classes = TestApplication.class,
         properties = {
-                "jobq.background-job-server.enabled=false",
-                "jobq.dashboard.enabled=true",
-                "jobq.dashboard.username=admin",
-                "jobq.dashboard.password=supersecret"
+            "jobq.background-job-server.enabled=false",
+            "jobq.dashboard.enabled=true",
+            "jobq.dashboard.username=admin",
+            "jobq.dashboard.password=supersecret"
         })
 @ActiveProfiles("test")
 @Testcontainers
@@ -90,17 +89,14 @@ class JobQDashboardIntegrationTest {
 
     @Test
     void shouldRequireAuthenticationForDashboardEndpoints() throws Exception {
-        mockMvc.perform(get("/jobq/htmx/jobs"))
-                .andExpect(status().isUnauthorized());
+        mockMvc.perform(get("/jobq/htmx/jobs")).andExpect(status().isUnauthorized());
 
-        mockMvc.perform(get("/jobq/dashboard"))
-                .andExpect(status().isUnauthorized());
+        mockMvc.perform(get("/jobq/dashboard")).andExpect(status().isUnauthorized());
     }
 
     @Test
     void shouldServeFavicon() throws Exception {
-        mockMvc.perform(get("/favicon.ico"))
-                .andExpect(status().isOk());
+        mockMvc.perform(get("/favicon.ico")).andExpect(status().isOk());
     }
 
     @Test
@@ -144,10 +140,10 @@ class JobQDashboardIntegrationTest {
 
     @Test
     void shouldFilterAndSortScheduledPendingJobs() throws Exception {
-        Job earliest = persistPending("generate-report-early", OffsetDateTime.now().plusMinutes(5), 0, "reports",
-                "customer-1");
-        Job later = persistPending("generate-report-late", OffsetDateTime.now().plusMinutes(10), 1, "reports",
-                "customer-2");
+        Job earliest = persistPending(
+                "generate-report-early", OffsetDateTime.now().plusMinutes(5), 0, "reports", "customer-1");
+        Job later = persistPending(
+                "generate-report-late", OffsetDateTime.now().plusMinutes(10), 1, "reports", "customer-2");
         persistPending("other-job", OffsetDateTime.now().minusMinutes(1), 0, "misc", "other");
 
         String html = mockMvc.perform(get("/jobq/htmx/jobs")
@@ -197,8 +193,7 @@ class JobQDashboardIntegrationTest {
         failed.setRunAt(OffsetDateTime.now().plusHours(1));
         jobRepository.saveAndFlush(failed);
 
-        mockMvc.perform(post("/jobq/htmx/job/" + failed.getId() + "/retry")
-                        .header("Authorization", basicAuthHeader()))
+        mockMvc.perform(post("/jobq/htmx/job/" + failed.getId() + "/retry").header("Authorization", basicAuthHeader()))
                 .andExpect(status().isOk())
                 .andExpect(header().string("HX-Trigger", "jobq-refresh"))
                 .andExpect(content().string(org.hamcrest.Matchers.containsString("queued for retry")));
@@ -241,8 +236,7 @@ class JobQDashboardIntegrationTest {
     void shouldRejectRerunForNonTerminalJob() throws Exception {
         Job pending = persistPending("non-failed", OffsetDateTime.now(), 0, null, null);
 
-        mockMvc.perform(post("/jobq/htmx/job/" + pending.getId() + "/retry")
-                        .header("Authorization", basicAuthHeader()))
+        mockMvc.perform(post("/jobq/htmx/job/" + pending.getId() + "/retry").header("Authorization", basicAuthHeader()))
                 .andExpect(status().isOk())
                 .andExpect(content().string(org.hamcrest.Matchers.containsString("cannot be rerun")));
 
@@ -256,8 +250,8 @@ class JobQDashboardIntegrationTest {
     }
 
     private Job persistPending(String type, OffsetDateTime runAt, int retryCount, String groupId, String replaceKey) {
-        Job job = new Job(UUID.randomUUID(), type, objectMapper.valueToTree(Map.of("type", type)), 5, 0, groupId,
-                replaceKey);
+        Job job = new Job(
+                UUID.randomUUID(), type, objectMapper.valueToTree(Map.of("type", type)), 5, 0, groupId, replaceKey);
         job.setRunAt(runAt);
         job.setRetryCount(retryCount);
         job.setUpdatedAt(OffsetDateTime.now());

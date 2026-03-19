@@ -5,11 +5,10 @@ import jakarta.persistence.Entity;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 import jakarta.persistence.Transient;
-import org.hibernate.annotations.JdbcTypeCode;
-import org.hibernate.type.SqlTypes;
-
 import java.time.OffsetDateTime;
 import java.util.UUID;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 
 @Entity
 @Table(name = "jobq_jobs")
@@ -87,8 +86,14 @@ public class Job {
         this.updatedAt = now;
     }
 
-    public Job(UUID id, String type, com.fasterxml.jackson.databind.JsonNode payload, int maxRetries, int priority,
-            String groupId, String replaceKey) {
+    public Job(
+            UUID id,
+            String type,
+            com.fasterxml.jackson.databind.JsonNode payload,
+            int maxRetries,
+            int priority,
+            String groupId,
+            String replaceKey) {
         this(id, type, payload, maxRetries, priority);
         this.groupId = groupId;
         this.replaceKey = replaceKey;

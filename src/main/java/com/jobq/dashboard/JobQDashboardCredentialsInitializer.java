@@ -2,13 +2,12 @@ package com.jobq.dashboard;
 
 import com.jobq.config.JobQProperties;
 import jakarta.annotation.PostConstruct;
+import java.security.SecureRandom;
+import java.util.Base64;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
-
-import java.security.SecureRandom;
-import java.util.Base64;
 
 @Component
 @ConditionalOnProperty(prefix = "jobq.dashboard", name = "enabled", havingValue = "true")

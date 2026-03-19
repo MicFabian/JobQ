@@ -8,20 +8,6 @@ import com.jobq.JobRepository;
 import com.jobq.JobWorker;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.ListableBeanFactory;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
-import org.springframework.core.annotation.AnnotationUtils;
-import org.springframework.dao.DataIntegrityViolationException;
-import org.springframework.data.domain.PageRequest;
-import org.springframework.scheduling.annotation.Scheduled;
-import org.springframework.scheduling.support.CronExpression;
-import org.springframework.stereotype.Component;
-import org.springframework.transaction.support.TransactionTemplate;
-import org.springframework.util.ClassUtils;
-import org.springframework.util.ReflectionUtils;
-
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
@@ -37,9 +23,26 @@ import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ListableBeanFactory;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.core.annotation.AnnotationUtils;
+import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.scheduling.support.CronExpression;
+import org.springframework.stereotype.Component;
+import org.springframework.transaction.support.TransactionTemplate;
+import org.springframework.util.ClassUtils;
+import org.springframework.util.ReflectionUtils;
 
 @Component
-@ConditionalOnProperty(prefix = "jobq.background-job-server", name = "enabled", havingValue = "true", matchIfMissing = true)
+@ConditionalOnProperty(
+        prefix = "jobq.background-job-server",
+        name = "enabled",
+        havingValue = "true",
+        matchIfMissing = true)
 public class JobPoller {
 
     private static final Logger log = LoggerFactory.getLogger(JobPoller.class);
@@ -183,8 +186,10 @@ public class JobPoller {
                 try {
                     processingExecutor.execute(() -> processJob(job, registration));
                 } catch (RejectedExecutionException saturatedProcessingQueue) {
-                    log.debug("Skipping job {} dispatch for type {} because processing queue is saturated",
-                            job.getId(), jobType);
+                    log.debug(
+                            "Skipping job {} dispatch for type {} because processing queue is saturated",
+                            job.getId(),
+                            jobType);
                     return;
                 }
             }
@@ -197,7 +202,8 @@ public class JobPoller {
     }
 
     private int availableProcessingSlots() {
-        int inFlight = processingExecutor.getActiveCount() + processingExecutor.getQueue().size();
+        int inFlight = processingExecutor.getActiveCount()
+                + processingExecutor.getQueue().size();
         return Math.max(0, processingQueueCapacity - inFlight);
     }
 
@@ -214,8 +220,11 @@ public class JobPoller {
         } catch (Exception e) {
             invokeOnErrorSafely(registration, job.getId(), payload, e);
             if (isExpectedException(registration, e)) {
-                log.debug("Job {} of type {} threw expected exception {}. Marking as COMPLETED.",
-                        job.getId(), job.getType(), e.getClass().getName());
+                log.debug(
+                        "Job {} of type {} threw expected exception {}. Marking as COMPLETED.",
+                        job.getId(),
+                        job.getType(),
+                        e.getClass().getName());
                 markCompleted(job, registration);
                 invokeOnSuccessSafely(registration, job.getId(), payload);
                 return;
@@ -240,8 +249,7 @@ public class JobPoller {
         try {
             registration.successHandler().onSuccess(jobId, payload);
         } catch (Exception onSuccessFailure) {
-            log.error("onSuccess callback failed for job {} of type {}", jobId, registration.type(),
-                    onSuccessFailure);
+            log.error("onSuccess callback failed for job {} of type {}", jobId, registration.type(), onSuccessFailure);
         }
     }
 
@@ -260,11 +268,18 @@ public class JobPoller {
         PayloadDeserializer payloadDeserializer = payloadDeserializerFor(payloadClass);
 
         JobInvoker invoker = (jobId, payload) -> invokeWorker(worker, jobId, payload);
-        JobErrorHandler errorHandler = (jobId, payload, exception) -> invokeWorkerOnError(worker, jobId, payload,
-                exception);
+        JobErrorHandler errorHandler =
+                (jobId, payload, exception) -> invokeWorkerOnError(worker, jobId, payload, exception);
         JobSuccessHandler successHandler = (jobId, payload) -> invokeWorkerOnSuccess(worker, jobId, payload);
         JobAfterHandler afterHandler = (jobId, payload) -> invokeWorkerAfter(worker, jobId, payload);
-        registerJob(registrations, jobType, payloadDeserializer, annotation, invoker, errorHandler, successHandler,
+        registerJob(
+                registrations,
+                jobType,
+                payloadDeserializer,
+                annotation,
+                invoker,
+                errorHandler,
+                successHandler,
                 afterHandler,
                 "JobWorker bean " + ClassUtils.getUserClass(worker).getName());
     }
@@ -275,10 +290,8 @@ public class JobPoller {
             return;
         }
 
-        String jobType = annotation.value() == null ? "" : annotation.value().trim();
-        if (jobType.isEmpty()) {
-            throw new IllegalStateException("@Job value must not be blank on " + ClassUtils.getUserClass(bean).getName());
-        }
+        Class<?> beanClass = ClassUtils.getUserClass(bean);
+        String jobType = resolveConfiguredTypeOrClassName(annotation.value(), beanClass);
 
         Method processMethod = resolveProcessMethod(bean, annotation);
         Class<?> payloadClass = resolvePayloadClass(annotation, processMethod);
@@ -291,9 +304,24 @@ public class JobPoller {
         JobSuccessHandler successHandler = createOnSuccessHandler(bean, onSuccessMethod);
         JobAfterHandler afterHandler = createAfterHandler(bean, afterMethod);
 
-        registerJob(registrations, jobType, payloadDeserializer, annotation, invoker, errorHandler, successHandler,
+        registerJob(
+                registrations,
+                jobType,
+                payloadDeserializer,
+                annotation,
+                invoker,
+                errorHandler,
+                successHandler,
                 afterHandler,
                 "@Job bean " + ClassUtils.getUserClass(bean).getName());
+    }
+
+    private String resolveConfiguredTypeOrClassName(String configuredType, Class<?> ownerClass) {
+        String normalized = configuredType == null ? "" : configuredType.trim();
+        if (!normalized.isEmpty()) {
+            return normalized;
+        }
+        return ClassUtils.getUserClass(ownerClass).getName();
     }
 
     private void registerJob(
@@ -308,7 +336,9 @@ public class JobPoller {
             String source) {
         String recurringCron = null;
         CronExpression recurringCronExpression = null;
-        if (annotation != null && annotation.cron() != null && !annotation.cron().isBlank()) {
+        if (annotation != null
+                && annotation.cron() != null
+                && !annotation.cron().isBlank()) {
             recurringCron = annotation.cron().trim();
             try {
                 recurringCronExpression = CronExpression.parse(recurringCron);
@@ -317,15 +347,21 @@ public class JobPoller {
                         "Invalid cron expression '" + recurringCron + "' for job type '" + jobType + "'", e);
             }
         }
-        RegisteredJob existing = registrations.putIfAbsent(jobType,
-                new RegisteredJob(jobType, payloadDeserializer, annotation, invoker, errorHandler, successHandler,
+        RegisteredJob existing = registrations.putIfAbsent(
+                jobType,
+                new RegisteredJob(
+                        jobType,
+                        payloadDeserializer,
+                        annotation,
+                        invoker,
+                        errorHandler,
+                        successHandler,
                         afterHandler,
                         recurringCron,
                         recurringCronExpression));
         if (existing != null) {
-            throw new IllegalStateException(
-                    "Duplicate job type '" + jobType + "' detected while registering " + source
-                            + ". Each job type must be unique.");
+            throw new IllegalStateException("Duplicate job type '" + jobType + "' detected while registering " + source
+                    + ". Each job type must be unique.");
         }
     }
 
@@ -345,69 +381,76 @@ public class JobPoller {
         Class<?> configuredPayload = annotation.payload();
 
         if (configuredPayload != Void.class) {
-            Method exactTwoArgs = findUniqueMethod(processMethods,
+            Method exactTwoArgs = findUniqueMethod(
+                    processMethods,
                     method -> hasSignature(method, UUID.class, configuredPayload),
-                    targetClass, "(UUID, " + configuredPayload.getSimpleName() + ")");
+                    targetClass,
+                    "(UUID, " + configuredPayload.getSimpleName() + ")");
             if (exactTwoArgs != null) {
                 return exactTwoArgs;
             }
 
-            Method assignableTwoArgs = findUniqueMethod(processMethods,
+            Method assignableTwoArgs = findUniqueMethod(
+                    processMethods,
                     method -> method.getParameterCount() == 2
                             && UUID.class.isAssignableFrom(method.getParameterTypes()[0])
                             && method.getParameterTypes()[1].isAssignableFrom(configuredPayload),
-                    targetClass, "(UUID, <assignable " + configuredPayload.getSimpleName() + ">)");
+                    targetClass,
+                    "(UUID, <assignable " + configuredPayload.getSimpleName() + ">)");
             if (assignableTwoArgs != null) {
                 return assignableTwoArgs;
             }
 
-            Method exactOneArg = findUniqueMethod(processMethods,
+            Method exactOneArg = findUniqueMethod(
+                    processMethods,
                     method -> hasSignature(method, configuredPayload),
-                    targetClass, "(" + configuredPayload.getSimpleName() + ")");
+                    targetClass,
+                    "(" + configuredPayload.getSimpleName() + ")");
             if (exactOneArg != null) {
                 return exactOneArg;
             }
 
-            Method assignableOneArg = findUniqueMethod(processMethods,
+            Method assignableOneArg = findUniqueMethod(
+                    processMethods,
                     method -> method.getParameterCount() == 1
                             && !UUID.class.isAssignableFrom(method.getParameterTypes()[0])
                             && method.getParameterTypes()[0].isAssignableFrom(configuredPayload),
-                    targetClass, "(<assignable " + configuredPayload.getSimpleName() + ">)");
+                    targetClass,
+                    "(<assignable " + configuredPayload.getSimpleName() + ">)");
             if (assignableOneArg != null) {
                 return assignableOneArg;
             }
 
-            throw new IllegalStateException(
-                    "@Job bean " + targetClass.getName() + " declares payload " + configuredPayload.getName()
-                            + " but no matching process(...) method was found.");
+            throw new IllegalStateException("@Job bean " + targetClass.getName() + " declares payload "
+                    + configuredPayload.getName() + " but no matching process(...) method was found.");
         }
 
-        Method inferredTwoArgs = findUniqueMethod(processMethods,
-                method -> method.getParameterCount() == 2
-                        && UUID.class.isAssignableFrom(method.getParameterTypes()[0]),
-                targetClass, "(UUID, Payload)");
+        Method inferredTwoArgs = findUniqueMethod(
+                processMethods,
+                method -> method.getParameterCount() == 2 && UUID.class.isAssignableFrom(method.getParameterTypes()[0]),
+                targetClass,
+                "(UUID, Payload)");
         if (inferredTwoArgs != null) {
             return inferredTwoArgs;
         }
 
-        Method inferredOnePayloadArg = findUniqueMethod(processMethods,
-                method -> method.getParameterCount() == 1
-                        && !UUID.class.isAssignableFrom(method.getParameterTypes()[0]),
-                targetClass, "(Payload)");
+        Method inferredOnePayloadArg = findUniqueMethod(
+                processMethods,
+                method ->
+                        method.getParameterCount() == 1 && !UUID.class.isAssignableFrom(method.getParameterTypes()[0]),
+                targetClass,
+                "(Payload)");
         if (inferredOnePayloadArg != null) {
             return inferredOnePayloadArg;
         }
 
-        Method uuidOnly = findUniqueMethod(processMethods,
-                method -> hasSignature(method, UUID.class),
-                targetClass, "(UUID)");
+        Method uuidOnly =
+                findUniqueMethod(processMethods, method -> hasSignature(method, UUID.class), targetClass, "(UUID)");
         if (uuidOnly != null) {
             return uuidOnly;
         }
 
-        Method noArgs = findUniqueMethod(processMethods,
-                method -> method.getParameterCount() == 0,
-                targetClass, "()");
+        Method noArgs = findUniqueMethod(processMethods, method -> method.getParameterCount() == 0, targetClass, "()");
         if (noArgs != null) {
             return noArgs;
         }
@@ -427,9 +470,8 @@ public class JobPoller {
             return null;
         }
         if (matches.size() > 1) {
-            throw new IllegalStateException(
-                    "Ambiguous method overloads on " + targetClass.getName() + " for signature "
-                            + signatureDescription + ". Keep exactly one matching method.");
+            throw new IllegalStateException("Ambiguous method overloads on " + targetClass.getName() + " for signature "
+                    + signatureDescription + ". Keep exactly one matching method.");
         }
         Method selected = matches.get(0);
         ReflectionUtils.makeAccessible(selected);
@@ -481,31 +523,36 @@ public class JobPoller {
         }
 
         if (payloadClass != Void.class) {
-            Method fullContext = findUniqueMethod(onErrorMethods,
+            Method fullContext = findUniqueMethod(
+                    onErrorMethods,
                     method -> hasErrorSignature(method, UUID.class, payloadClass),
-                    targetClass, "onError(UUID, Payload, Exception)");
+                    targetClass,
+                    "onError(UUID, Payload, Exception)");
             if (fullContext != null) {
                 return fullContext;
             }
 
-            Method payloadAndError = findUniqueMethod(onErrorMethods,
+            Method payloadAndError = findUniqueMethod(
+                    onErrorMethods,
                     method -> hasErrorSignature(method, payloadClass),
-                    targetClass, "onError(Payload, Exception)");
+                    targetClass,
+                    "onError(Payload, Exception)");
             if (payloadAndError != null) {
                 return payloadAndError;
             }
         }
 
-        Method idAndError = findUniqueMethod(onErrorMethods,
+        Method idAndError = findUniqueMethod(
+                onErrorMethods,
                 method -> hasErrorSignature(method, UUID.class),
-                targetClass, "onError(UUID, Exception)");
+                targetClass,
+                "onError(UUID, Exception)");
         if (idAndError != null) {
             return idAndError;
         }
 
-        Method onlyError = findUniqueMethod(onErrorMethods,
-                this::hasErrorOnlySignature,
-                targetClass, "onError(Exception)");
+        Method onlyError =
+                findUniqueMethod(onErrorMethods, this::hasErrorOnlySignature, targetClass, "onError(Exception)");
         if (onlyError != null) {
             return onlyError;
         }
@@ -531,59 +578,64 @@ public class JobPoller {
         }
 
         if (payloadClass != Void.class) {
-            Method fullContext = findUniqueMethod(callbackMethods,
+            Method fullContext = findUniqueMethod(
+                    callbackMethods,
                     method -> hasSignature(method, UUID.class, payloadClass),
-                    targetClass, callbackName + "(UUID, Payload)");
+                    targetClass,
+                    callbackName + "(UUID, Payload)");
             if (fullContext != null) {
                 return fullContext;
             }
 
-            Method payloadOnly = findUniqueMethod(callbackMethods,
+            Method payloadOnly = findUniqueMethod(
+                    callbackMethods,
                     method -> hasSignature(method, payloadClass),
-                    targetClass, callbackName + "(Payload)");
+                    targetClass,
+                    callbackName + "(Payload)");
             if (payloadOnly != null) {
                 return payloadOnly;
             }
 
-            Method assignableTwoArgs = findUniqueMethod(callbackMethods,
+            Method assignableTwoArgs = findUniqueMethod(
+                    callbackMethods,
                     method -> method.getParameterCount() == 2
                             && UUID.class.isAssignableFrom(method.getParameterTypes()[0])
                             && method.getParameterTypes()[1].isAssignableFrom(payloadClass),
-                    targetClass, callbackName + "(UUID, <assignable Payload>)");
+                    targetClass,
+                    callbackName + "(UUID, <assignable Payload>)");
             if (assignableTwoArgs != null) {
                 return assignableTwoArgs;
             }
 
-            Method assignablePayloadOnly = findUniqueMethod(callbackMethods,
+            Method assignablePayloadOnly = findUniqueMethod(
+                    callbackMethods,
                     method -> method.getParameterCount() == 1
                             && !UUID.class.isAssignableFrom(method.getParameterTypes()[0])
                             && method.getParameterTypes()[0].isAssignableFrom(payloadClass),
-                    targetClass, callbackName + "(<assignable Payload>)");
+                    targetClass,
+                    callbackName + "(<assignable Payload>)");
             if (assignablePayloadOnly != null) {
                 return assignablePayloadOnly;
             }
         }
 
-        Method idOnly = findUniqueMethod(callbackMethods,
-                method -> hasSignature(method, UUID.class),
-                targetClass, callbackName + "(UUID)");
+        Method idOnly = findUniqueMethod(
+                callbackMethods, method -> hasSignature(method, UUID.class), targetClass, callbackName + "(UUID)");
         if (idOnly != null) {
             return idOnly;
         }
 
-        Method noArgs = findUniqueMethod(callbackMethods,
-                method -> method.getParameterCount() == 0,
-                targetClass, callbackName + "()");
+        Method noArgs = findUniqueMethod(
+                callbackMethods, method -> method.getParameterCount() == 0, targetClass, callbackName + "()");
         if (noArgs != null) {
             return noArgs;
         }
 
-        throw new IllegalStateException(
-                "@Job bean " + targetClass.getName()
-                        + " has unsupported " + callbackName
-                        + "(...) signatures. Supported: " + callbackName
-                        + "(), " + callbackName
-                        + "(UUID), " + callbackName + "(Payload), " + callbackName + "(UUID, Payload).");
+        throw new IllegalStateException("@Job bean " + targetClass.getName()
+                + " has unsupported " + callbackName
+                + "(...) signatures. Supported: " + callbackName
+                + "(), " + callbackName
+                + "(UUID), " + callbackName + "(Payload), " + callbackName + "(UUID, Payload).");
     }
 
     private List<Method> findLifecycleCallbackMethods(Class<?> targetClass, String methodName) {
@@ -633,8 +685,7 @@ public class JobPoller {
 
     private JobErrorHandler createOnErrorHandler(Object bean, Method onErrorMethod) {
         if (onErrorMethod == null) {
-            return (jobId, payload, exception) -> {
-            };
+            return (jobId, payload, exception) -> {};
         }
 
         int parameterCount = onErrorMethod.getParameterCount();
@@ -652,8 +703,7 @@ public class JobPoller {
 
     private JobSuccessHandler createOnSuccessHandler(Object bean, Method onSuccessMethod) {
         if (onSuccessMethod == null) {
-            return (jobId, payload) -> {
-            };
+            return (jobId, payload) -> {};
         }
 
         int parameterCount = onSuccessMethod.getParameterCount();
@@ -671,8 +721,7 @@ public class JobPoller {
 
     private JobAfterHandler createAfterHandler(Object bean, Method afterMethod) {
         if (afterMethod == null) {
-            return (jobId, payload) -> {
-            };
+            return (jobId, payload) -> {};
         }
 
         int parameterCount = afterMethod.getParameterCount();
@@ -709,7 +758,8 @@ public class JobPoller {
         castWorker.process(jobId, payload);
     }
 
-    private void invokeWorkerOnError(JobWorker<?> worker, UUID jobId, Object payload, Exception exception) throws Exception {
+    private void invokeWorkerOnError(JobWorker<?> worker, UUID jobId, Object payload, Exception exception)
+            throws Exception {
         @SuppressWarnings("unchecked")
         JobWorker<Object> castWorker = (JobWorker<Object>) worker;
         castWorker.onError(jobId, payload, exception);
@@ -734,31 +784,34 @@ public class JobPoller {
 
     private void markCompleted(Job jobSnapshot, RegisteredJob registration) {
         OffsetDateTime now = OffsetDateTime.now();
-        Integer updated = transactionTemplate
-                .execute(status -> jobRepository.markCompleted(jobSnapshot.getId(), now, nodeId));
+        Integer updated =
+                transactionTemplate.execute(status -> jobRepository.markCompleted(jobSnapshot.getId(), now, nodeId));
         if (toAffectedRows(updated) > 0) {
             scheduleNextRecurringExecutionIfNeeded(jobSnapshot, registration);
             return;
         }
 
         log.debug("Falling back to entity completion update for job {}", jobSnapshot.getId());
-        transactionTemplate.executeWithoutResult(status -> jobRepository.findById(jobSnapshot.getId()).ifPresent(job -> {
-            if (!isMutableProcessingJob(job)) {
-                log.debug("Skipping completion fallback for job {} due lifecycle/lock mismatch", jobSnapshot.getId());
-                return;
-            }
-            if (job.getProcessingStartedAt() == null) {
-                job.setProcessingStartedAt(now);
-            }
-            job.setFinishedAt(now);
-            job.setFailedAt(null);
-            job.setErrorMessage(null);
-            job.setLockedAt(null);
-            job.setLockedBy(null);
-            job.setUpdatedAt(now);
-            jobRepository.save(job);
-            scheduleNextRecurringExecutionIfNeeded(job, registration);
-        }));
+        transactionTemplate.executeWithoutResult(
+                status -> jobRepository.findById(jobSnapshot.getId()).ifPresent(job -> {
+                    if (!isMutableProcessingJob(job)) {
+                        log.debug(
+                                "Skipping completion fallback for job {} due lifecycle/lock mismatch",
+                                jobSnapshot.getId());
+                        return;
+                    }
+                    if (job.getProcessingStartedAt() == null) {
+                        job.setProcessingStartedAt(now);
+                    }
+                    job.setFinishedAt(now);
+                    job.setFailedAt(null);
+                    job.setErrorMessage(null);
+                    job.setLockedAt(null);
+                    job.setLockedBy(null);
+                    job.setUpdatedAt(now);
+                    jobRepository.save(job);
+                    scheduleNextRecurringExecutionIfNeeded(job, registration);
+                }));
     }
 
     private void scheduleNextRecurringExecutionIfNeeded(Job job, RegisteredJob registration) {
@@ -775,20 +828,31 @@ public class JobPoller {
                 return;
             }
 
-            Job nextJob = new Job(UUID.randomUUID(), job.getType(), job.getPayload(),
-                    job.getMaxRetries(), job.getPriority(), job.getGroupId(), recurringReplaceKey(registration.recurringCron()));
+            Job nextJob = new Job(
+                    UUID.randomUUID(),
+                    job.getType(),
+                    job.getPayload(),
+                    job.getMaxRetries(),
+                    job.getPriority(),
+                    job.getGroupId(),
+                    recurringReplaceKey(registration.recurringCron()));
             nextJob.setCron(registration.recurringCron());
             nextJob.setRunAt(nextRun);
             try {
                 jobRepository.save(nextJob);
                 log.info("Scheduled next execution of recurring job {} at {}", job.getType(), nextRun);
             } catch (DataIntegrityViolationException duplicateSchedule) {
-                log.debug("Skipped duplicate recurring schedule for type {} and cron '{}'", job.getType(),
+                log.debug(
+                        "Skipped duplicate recurring schedule for type {} and cron '{}'",
+                        job.getType(),
                         registration.recurringCron());
             }
         } catch (Exception cronEx) {
-            log.error("Failed to reschedule recurring job {} with cron '{}'",
-                    job.getType(), registration.recurringCron(), cronEx);
+            log.error(
+                    "Failed to reschedule recurring job {} with cron '{}'",
+                    job.getType(),
+                    registration.recurringCron(),
+                    cronEx);
         }
     }
 
@@ -804,12 +868,7 @@ public class JobPoller {
 
         if (nextRetryCount > jobSnapshot.getMaxRetries()) {
             Integer updated = transactionTemplate.execute(status -> jobRepository.markFailedTerminal(
-                    jobSnapshot.getId(),
-                    currentRetryCount,
-                    nextRetryCount,
-                    errorMessage,
-                    now,
-                    nodeId));
+                    jobSnapshot.getId(), currentRetryCount, nextRetryCount, errorMessage, now, nodeId));
             if (toAffectedRows(updated) > 0) {
                 return;
             }
@@ -834,46 +893,48 @@ public class JobPoller {
     }
 
     private void fallbackFailureUpdate(UUID jobId, Exception exception, RegisteredJob registration) {
-        transactionTemplate.executeWithoutResult(status -> jobRepository.findById(jobId).ifPresent(job -> {
-            if (!isMutableProcessingJob(job)) {
-                log.debug("Skipping failure fallback for job {} due lifecycle/lock mismatch", jobId);
-                return;
-            }
-            OffsetDateTime now = OffsetDateTime.now();
-            job.setErrorMessage(exception.getMessage());
-            job.incrementRetryCount();
-            job.setUpdatedAt(now);
+        transactionTemplate.executeWithoutResult(
+                status -> jobRepository.findById(jobId).ifPresent(job -> {
+                    if (!isMutableProcessingJob(job)) {
+                        log.debug("Skipping failure fallback for job {} due lifecycle/lock mismatch", jobId);
+                        return;
+                    }
+                    OffsetDateTime now = OffsetDateTime.now();
+                    job.setErrorMessage(exception.getMessage());
+                    job.incrementRetryCount();
+                    job.setUpdatedAt(now);
 
-            if (job.getRetryCount() > job.getMaxRetries()) {
-                if (job.getProcessingStartedAt() == null) {
-                    job.setProcessingStartedAt(now);
-                }
-                job.setFailedAt(now);
-                job.setFinishedAt(null);
-                job.setLockedAt(null);
-                job.setLockedBy(null);
-            } else {
-                RetryDecision retryDecision = computeRetryDecision(job, registration, job.getRetryCount(), now);
-                job.setProcessingStartedAt(null);
-                job.setFinishedAt(null);
-                job.setFailedAt(null);
-                job.setLockedAt(null);
-                job.setLockedBy(null);
-                job.setRunAt(retryDecision.nextRunAt());
-                job.setPriority(retryDecision.nextPriority());
-            }
-            jobRepository.save(job);
-        }));
+                    if (job.getRetryCount() > job.getMaxRetries()) {
+                        if (job.getProcessingStartedAt() == null) {
+                            job.setProcessingStartedAt(now);
+                        }
+                        job.setFailedAt(now);
+                        job.setFinishedAt(null);
+                        job.setLockedAt(null);
+                        job.setLockedBy(null);
+                    } else {
+                        RetryDecision retryDecision = computeRetryDecision(job, registration, job.getRetryCount(), now);
+                        job.setProcessingStartedAt(null);
+                        job.setFinishedAt(null);
+                        job.setFailedAt(null);
+                        job.setLockedAt(null);
+                        job.setLockedBy(null);
+                        job.setRunAt(retryDecision.nextRunAt());
+                        job.setPriority(retryDecision.nextPriority());
+                    }
+                    jobRepository.save(job);
+                }));
     }
 
-    private RetryDecision computeRetryDecision(Job job, RegisteredJob registration, int retryCount, OffsetDateTime now) {
+    private RetryDecision computeRetryDecision(
+            Job job, RegisteredJob registration, int retryCount, OffsetDateTime now) {
         com.jobq.annotation.Job jobAnnotation = registration.annotation();
         int nextPriority = job.getPriority();
         OffsetDateTime nextRunAt;
 
         if (jobAnnotation != null) {
-            long delayMs = (long) (jobAnnotation.initialBackoffMs()
-                    * Math.pow(jobAnnotation.backoffMultiplier(), retryCount - 1));
+            long delayMs = (long)
+                    (jobAnnotation.initialBackoffMs() * Math.pow(jobAnnotation.backoffMultiplier(), retryCount - 1));
             nextRunAt = now.plusNanos(delayMs * 1_000_000);
 
             if (jobAnnotation.retryPriority() == com.jobq.annotation.Job.RetryPriority.LOWER_ON_RETRY) {
@@ -884,8 +945,7 @@ public class JobPoller {
             return new RetryDecision(nextRunAt, nextPriority);
         }
 
-        long delaySeconds = (long) Math.pow(properties.getJobs().getRetryBackOffTimeSeed(),
-                Math.max(1, retryCount));
+        long delaySeconds = (long) Math.pow(properties.getJobs().getRetryBackOffTimeSeed(), Math.max(1, retryCount));
         nextRunAt = now.plusSeconds(delaySeconds);
         return new RetryDecision(nextRunAt, nextPriority);
     }
@@ -920,8 +980,7 @@ public class JobPoller {
                 && nodeId.equals(job.getLockedBy());
     }
 
-    private record RetryDecision(OffsetDateTime nextRunAt, int nextPriority) {
-    }
+    private record RetryDecision(OffsetDateTime nextRunAt, int nextPriority) {}
 
     @FunctionalInterface
     private interface JobInvoker {
@@ -942,8 +1001,7 @@ public class JobPoller {
             JobSuccessHandler successHandler,
             JobAfterHandler afterHandler,
             String recurringCron,
-            CronExpression recurringCronExpression) {
-    }
+            CronExpression recurringCronExpression) {}
 
     @FunctionalInterface
     private interface JobErrorHandler {

@@ -1,12 +1,12 @@
 package com.jobq.dashboard;
 
-import com.jobq.config.JobQProperties;
-import org.junit.jupiter.api.Test;
-
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+
+import com.jobq.config.JobQProperties;
+import org.junit.jupiter.api.Test;
 
 class JobQDashboardCredentialsInitializerTest {
 
@@ -21,7 +21,10 @@ class JobQDashboardCredentialsInitializerTest {
 
         assertFalse(properties.getDashboard().getUsername().isBlank());
         assertFalse(properties.getDashboard().getPassword().isBlank());
-        assertFalse(properties.getDashboard().getUsername().equals(properties.getDashboard().getPassword()));
+        assertFalse(properties
+                .getDashboard()
+                .getUsername()
+                .equals(properties.getDashboard().getPassword()));
     }
 
     @Test

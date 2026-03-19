@@ -1,24 +1,11 @@
 package com.jobq.dashboard;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.jobq.Job;
-import com.jobq.JobRepository;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
-import org.mockito.ArgumentCaptor;
-import org.springframework.data.domain.Page;
-import org.springframework.data.domain.PageImpl;
-import org.springframework.data.domain.Pageable;
-import org.springframework.test.web.servlet.MockMvc;
-import org.springframework.test.web.servlet.setup.MockMvcBuilders;
-
-import java.time.OffsetDateTime;
-import java.util.List;
-import java.util.Optional;
-import java.util.UUID;
-
 import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.not;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -32,10 +19,22 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNull;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
-import static org.junit.jupiter.api.Assertions.assertTrue;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.jobq.Job;
+import com.jobq.JobRepository;
+import java.time.OffsetDateTime;
+import java.util.List;
+import java.util.Optional;
+import java.util.UUID;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.Pageable;
+import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
 class JobQHtmxControllerTest {
 
@@ -105,7 +104,8 @@ class JobQHtmxControllerTest {
                 null);
 
         Page<JobRepository.DashboardJobView> jobPage = new PageImpl<>(List.of(job));
-        when(jobRepository.findDashboardJobViews(anyString(), anyString(), anyBoolean(), anyBoolean(), anyBoolean(), any(), any(Pageable.class)))
+        when(jobRepository.findDashboardJobViews(
+                        anyString(), anyString(), anyBoolean(), anyBoolean(), anyBoolean(), any(), any(Pageable.class)))
                 .thenReturn(jobPage);
 
         mockMvc.perform(get("/jobq/htmx/jobs"))
@@ -135,7 +135,8 @@ class JobQHtmxControllerTest {
                 "Database timeout while writing status row");
 
         Page<JobRepository.DashboardJobView> jobPage = new PageImpl<>(List.of(job));
-        when(jobRepository.findDashboardJobViews(anyString(), anyString(), anyBoolean(), anyBoolean(), anyBoolean(), any(), any(Pageable.class)))
+        when(jobRepository.findDashboardJobViews(
+                        anyString(), anyString(), anyBoolean(), anyBoolean(), anyBoolean(), any(), any(Pageable.class)))
                 .thenReturn(jobPage);
 
         mockMvc.perform(get("/jobq/htmx/jobs").param("status", "FAILED"))
@@ -163,7 +164,8 @@ class JobQHtmxControllerTest {
                 null);
 
         Page<JobRepository.DashboardJobView> jobPage = new PageImpl<>(List.of(job));
-        when(jobRepository.findDashboardJobViews(anyString(), anyString(), anyBoolean(), anyBoolean(), anyBoolean(), any(), any(Pageable.class)))
+        when(jobRepository.findDashboardJobViews(
+                        anyString(), anyString(), anyBoolean(), anyBoolean(), anyBoolean(), any(), any(Pageable.class)))
                 .thenReturn(jobPage);
 
         mockMvc.perform(get("/jobq/htmx/jobs").param("status", "COMPLETED"))
@@ -173,7 +175,8 @@ class JobQHtmxControllerTest {
 
     @Test
     void shouldReturnHtmlForPaginationControls() throws Exception {
-        when(jobRepository.findDashboardJobViews(anyString(), anyString(), anyBoolean(), anyBoolean(), anyBoolean(), any(), any(Pageable.class)))
+        when(jobRepository.findDashboardJobViews(
+                        anyString(), anyString(), anyBoolean(), anyBoolean(), anyBoolean(), any(), any(Pageable.class)))
                 .thenReturn(Page.empty());
 
         mockMvc.perform(get("/jobq/htmx/pagination"))
@@ -184,15 +187,23 @@ class JobQHtmxControllerTest {
 
     @Test
     void shouldClampInvalidPageAndSizeValues() throws Exception {
-        when(jobRepository.findDashboardJobViews(anyString(), anyString(), anyBoolean(), anyBoolean(), anyBoolean(), any(), any(Pageable.class)))
+        when(jobRepository.findDashboardJobViews(
+                        anyString(), anyString(), anyBoolean(), anyBoolean(), anyBoolean(), any(), any(Pageable.class)))
                 .thenReturn(Page.empty());
 
         mockMvc.perform(get("/jobq/htmx/jobs").param("page", "-7").param("size", "100000"))
                 .andExpect(status().isOk());
 
         ArgumentCaptor<Pageable> pageableCaptor = ArgumentCaptor.forClass(Pageable.class);
-        verify(jobRepository).findDashboardJobViews(anyString(), anyString(), anyBoolean(), anyBoolean(), anyBoolean(), any(),
-                pageableCaptor.capture());
+        verify(jobRepository)
+                .findDashboardJobViews(
+                        anyString(),
+                        anyString(),
+                        anyBoolean(),
+                        anyBoolean(),
+                        anyBoolean(),
+                        any(),
+                        pageableCaptor.capture());
         Pageable pageable = pageableCaptor.getValue();
         assertEquals(0, pageable.getPageNumber());
         assertEquals(200, pageable.getPageSize());
@@ -201,7 +212,8 @@ class JobQHtmxControllerTest {
 
     @Test
     void shouldApplySortingAndFilterFlagsToDashboardQuery() throws Exception {
-        when(jobRepository.findDashboardJobViews(anyString(), anyString(), anyBoolean(), anyBoolean(), anyBoolean(), any(), any(Pageable.class)))
+        when(jobRepository.findDashboardJobViews(
+                        anyString(), anyString(), anyBoolean(), anyBoolean(), anyBoolean(), any(), any(Pageable.class)))
                 .thenReturn(Page.empty());
 
         mockMvc.perform(get("/jobq/htmx/jobs")
@@ -213,14 +225,15 @@ class JobQHtmxControllerTest {
                 .andExpect(status().isOk());
 
         ArgumentCaptor<Pageable> pageableCaptor = ArgumentCaptor.forClass(Pageable.class);
-        verify(jobRepository).findDashboardJobViews(
-                eq("PROCESSING"),
-                eq("sync-customer"),
-                eq(true),
-                eq(true),
-                eq(false),
-                eq(new UUID(0L, 0L)),
-                pageableCaptor.capture());
+        verify(jobRepository)
+                .findDashboardJobViews(
+                        eq("PROCESSING"),
+                        eq("sync-customer"),
+                        eq(true),
+                        eq(true),
+                        eq(false),
+                        eq(new UUID(0L, 0L)),
+                        pageableCaptor.capture());
 
         Pageable pageable = pageableCaptor.getValue();
         assertEquals(0, pageable.getPageNumber());
@@ -245,24 +258,18 @@ class JobQHtmxControllerTest {
                 null,
                 null,
                 null);
-        when(jobRepository.findDashboardJobViews(anyString(), anyString(), anyBoolean(), anyBoolean(), anyBoolean(), any(), any(Pageable.class)))
+        when(jobRepository.findDashboardJobViews(
+                        anyString(), anyString(), anyBoolean(), anyBoolean(), anyBoolean(), any(), any(Pageable.class)))
                 .thenReturn(new PageImpl<>(List.of(delayedJob)));
 
-        mockMvc.perform(get("/jobq/htmx/jobs")
-                        .param("scheduledOnly", "true")
-                        .param("sort", "run-at-asc"))
+        mockMvc.perform(get("/jobq/htmx/jobs").param("scheduledOnly", "true").param("sort", "run-at-asc"))
                 .andExpect(status().isOk())
                 .andExpect(content().string(containsString("Runs ")));
 
         ArgumentCaptor<Pageable> pageableCaptor = ArgumentCaptor.forClass(Pageable.class);
-        verify(jobRepository).findDashboardJobViews(
-                eq(""),
-                eq(""),
-                eq(true),
-                eq(false),
-                eq(false),
-                eq(new UUID(0L, 0L)),
-                pageableCaptor.capture());
+        verify(jobRepository)
+                .findDashboardJobViews(
+                        eq(""), eq(""), eq(true), eq(false), eq(false), eq(new UUID(0L, 0L)), pageableCaptor.capture());
 
         Pageable pageable = pageableCaptor.getValue();
         assertNotNull(pageable.getSort().getOrderFor("runAt"));
@@ -271,22 +278,23 @@ class JobQHtmxControllerTest {
 
     @Test
     void shouldTreatUuidSearchAsExactIdMatch() throws Exception {
-        when(jobRepository.findDashboardJobViews(anyString(), anyString(), anyBoolean(), anyBoolean(), anyBoolean(), any(), any(Pageable.class)))
+        when(jobRepository.findDashboardJobViews(
+                        anyString(), anyString(), anyBoolean(), anyBoolean(), anyBoolean(), any(), any(Pageable.class)))
                 .thenReturn(Page.empty());
         UUID searchedId = UUID.randomUUID();
 
-        mockMvc.perform(get("/jobq/htmx/jobs")
-                        .param("query", searchedId.toString()))
+        mockMvc.perform(get("/jobq/htmx/jobs").param("query", searchedId.toString()))
                 .andExpect(status().isOk());
 
-        verify(jobRepository).findDashboardJobViews(
-                eq(""),
-                eq(searchedId.toString()),
-                eq(false),
-                eq(false),
-                eq(true),
-                eq(searchedId),
-                any(Pageable.class));
+        verify(jobRepository)
+                .findDashboardJobViews(
+                        eq(""),
+                        eq(searchedId.toString()),
+                        eq(false),
+                        eq(false),
+                        eq(true),
+                        eq(searchedId),
+                        any(Pageable.class));
     }
 
     @Test
@@ -307,7 +315,8 @@ class JobQHtmxControllerTest {
                 null);
 
         Page<JobRepository.DashboardJobView> jobPage = new PageImpl<>(List.of(job));
-        when(jobRepository.findDashboardJobViews(anyString(), anyString(), anyBoolean(), anyBoolean(), anyBoolean(), any(), any(Pageable.class)))
+        when(jobRepository.findDashboardJobViews(
+                        anyString(), anyString(), anyBoolean(), anyBoolean(), anyBoolean(), any(), any(Pageable.class)))
                 .thenReturn(jobPage);
 
         mockMvc.perform(get("/jobq/htmx/jobs").param("status", "FAILED\" onclick=\"alert(1)"))

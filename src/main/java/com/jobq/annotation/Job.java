@@ -6,15 +6,16 @@ import java.lang.annotation.*;
  * Indicates that the annotated component is a JobQ job and configures its
  * execution behavior (retries, backoff, queueing priority).
  */
-@Target({ ElementType.TYPE, ElementType.METHOD })
+@Target({ElementType.TYPE, ElementType.METHOD})
 @Retention(RetentionPolicy.RUNTIME)
 @Documented
 public @interface Job {
 
     /**
-     * The type of job this processor handles.
+     * Optional explicit type of job this processor handles.
+     * If blank, JobQ uses the fully-qualified class name as the job type.
      */
-    String value();
+    String value() default "";
 
     /**
      * Optional payload class for annotation-driven jobs. When left as
