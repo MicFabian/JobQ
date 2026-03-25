@@ -30,6 +30,7 @@ public class JobClient {
     private final JdbcTemplate jdbcTemplate;
     private final String jobTableName;
     private final String dedupUpsertSql;
+    private final String synchronizeGroupDelaySql;
     private final JobTypeMetadataRegistry jobTypeMetadataRegistry;
 
     @Autowired
@@ -46,6 +47,7 @@ public class JobClient {
         this.jobTypeMetadataRegistry = jobTypeMetadataRegistry;
         this.jobTableName = resolveJobTableName(properties.getDatabase().getTablePrefix());
         this.dedupUpsertSql = buildDedupUpsertSql(jobTableName);
+        this.synchronizeGroupDelaySql = buildSynchronizeGroupDelaySql(jobTableName);
     }
 
     JobClient(
@@ -221,6 +223,7 @@ public class JobClient {
                     resolvedRunAt,
                     now,
                     updateRunAtOnReplace);
+            synchronizeGroupedDelayIfConfigured(normalizedType, normalizedGroupId, resolvedRunAt, now);
             log.debug(
                     "Dedup-enqueued job {} of type {} with replaceKey '{}'",
                     dedupedId,
@@ -235,6 +238,7 @@ public class JobClient {
         job.setRunAt(resolvedRunAt);
         job.setUpdatedAt(now);
         jobRepository.save(job);
+        synchronizeGroupedDelayIfConfigured(normalizedType, normalizedGroupId, resolvedRunAt, now);
         log.debug("Enqueued job {} of type {}", jobId, normalizedType);
         return jobId;
     }
@@ -331,6 +335,31 @@ public class JobClient {
                 == com.jobq.annotation.Job.DeduplicationRunAtPolicy.UPDATE_ON_REPLACE;
     }
 
+    private boolean shouldSynchronizeGroupedDelayOnEnqueue(String jobType) {
+        if (jobTypeMetadataRegistry == null) {
+            return false;
+        }
+        com.jobq.annotation.Job.GroupDelayPolicy policy = jobTypeMetadataRegistry.groupDelayPolicyFor(jobType);
+        return policy == com.jobq.annotation.Job.GroupDelayPolicy.SYNC_WITH_NEW_DELAY;
+    }
+
+    private void synchronizeGroupedDelayIfConfigured(
+            String type, String groupId, OffsetDateTime runAt, OffsetDateTime now) {
+        if (groupId == null || !shouldSynchronizeGroupedDelayOnEnqueue(type)) {
+            return;
+        }
+        int updated = jdbcTemplate.update(synchronizeGroupDelaySql, ps -> {
+            ps.setObject(1, runAt);
+            ps.setObject(2, now);
+            ps.setString(3, type);
+            ps.setString(4, groupId);
+            ps.setObject(5, runAt);
+        });
+        if (updated > 0) {
+            log.debug("Synchronized runAt for {} pending grouped jobs of type {} in group {}", updated, type, groupId);
+        }
+    }
+
     private UUID upsertPendingDeduplicatedJob(
             String type,
             JsonNode payload,
@@ -396,6 +425,21 @@ public class JobClient {
                   locked_at = NULL,
                   locked_by = NULL
                 RETURNING id
+                """
+                .formatted(tableName);
+    }
+
+    private String buildSynchronizeGroupDelaySql(String tableName) {
+        return """
+                UPDATE %1$s
+                SET run_at = ?,
+                    updated_at = ?
+                WHERE type = ?
+                  AND group_id = ?
+                  AND processing_started_at IS NULL
+                  AND finished_at IS NULL
+                  AND failed_at IS NULL
+                  AND (run_at IS NULL OR run_at <> ?)
                 """
                 .formatted(tableName);
     }

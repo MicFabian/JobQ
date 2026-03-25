@@ -654,6 +654,38 @@ public class JobQIntegrationTest {
             return new DedupUpdateDelayJobWorker();
         }
 
+        @com.jobq.annotation.Job(
+                value = "GROUP_SYNC_DELAY_JOB",
+                groupDelayPolicy = com.jobq.annotation.Job.GroupDelayPolicy.SYNC_WITH_NEW_DELAY)
+        static class GroupSyncDelayJobWorker implements JobWorker<TestPayload> {
+            @Override
+            public void process(UUID jobId, TestPayload payload) {
+                // no-op
+            }
+        }
+
+        @Bean
+        JobWorker<TestPayload> groupSyncDelayJobWorker() {
+            return new GroupSyncDelayJobWorker();
+        }
+
+        @com.jobq.annotation.Job(
+                value = "GROUP_RELEASE_ON_FIRST_DUE_JOB",
+                groupDelayPolicy = com.jobq.annotation.Job.GroupDelayPolicy.KEEP_EXISTING_DELAY_RUN_ALL_ON_FIRST_DUE)
+        static class GroupReleaseOnFirstDueJobWorker implements JobWorker<TestPayload> {
+            @Override
+            public void process(UUID jobId, TestPayload payload) {
+                if (jobLatch != null) {
+                    jobLatch.countDown();
+                }
+            }
+        }
+
+        @Bean
+        JobWorker<TestPayload> groupReleaseOnFirstDueJobWorker() {
+            return new GroupReleaseOnFirstDueJobWorker();
+        }
+
         @com.jobq.annotation.Job(value = "RECURRING_JOB", cron = "*/2 * * * * *")
         static class RecurringWorker implements JobWorker<Void> {
             @Override
@@ -765,7 +797,8 @@ public class JobQIntegrationTest {
                 "idx_jobq_jobs_failed_created_at",
                 "idx_jobq_jobs_finished_at_cleanup",
                 "idx_jobq_jobs_failed_at_cleanup",
-                "idx_jobq_jobs_active_type_cron");
+                "idx_jobq_jobs_active_type_cron",
+                "idx_jobq_jobs_active_type_group_run_at");
 
         for (String indexName : expectedIndexes) {
             Integer indexCount = jdbcTemplate.queryForObject(
@@ -786,6 +819,14 @@ public class JobQIntegrationTest {
         Integer baselineMigrationCount = jdbcTemplate.queryForObject(
                 "SELECT count(*) FROM jobq_schema_migrations WHERE version = '1'", Integer.class);
         assertEquals(1, baselineMigrationCount);
+
+        Integer timestampMigrationCount = jdbcTemplate.queryForObject(
+                "SELECT count(*) FROM jobq_schema_migrations WHERE version = '2'", Integer.class);
+        assertEquals(1, timestampMigrationCount);
+
+        Integer groupIndexMigrationCount = jdbcTemplate.queryForObject(
+                "SELECT count(*) FROM jobq_schema_migrations WHERE version = '3'", Integer.class);
+        assertEquals(1, groupIndexMigrationCount);
 
         String checksum = jdbcTemplate.queryForObject(
                 "SELECT checksum FROM jobq_schema_migrations WHERE version = '1'", String.class);
@@ -1561,6 +1602,54 @@ public class JobQIntegrationTest {
                 assertEquals(
                         "COMPLETED", jobRepository.findById(id).orElseThrow().getStatus());
             }
+        });
+    }
+
+    @Test
+    void shouldSynchronizeGroupedPendingRunAtWhenPolicyIsSyncWithNewDelay() {
+        String groupId = "group-sync-" + UUID.randomUUID();
+        OffsetDateTime firstRunAt = OffsetDateTime.now().plusSeconds(30).withNano(0);
+        OffsetDateTime secondRunAt = firstRunAt.plusSeconds(40);
+
+        UUID firstId =
+                jobClient.enqueueAt("GROUP_SYNC_DELAY_JOB", new TestPayload("first"), 3, groupId, null, firstRunAt);
+        UUID secondId =
+                jobClient.enqueueAt("GROUP_SYNC_DELAY_JOB", new TestPayload("second"), 3, groupId, null, secondRunAt);
+
+        Job first = jobRepository.findById(firstId).orElseThrow();
+        Job second = jobRepository.findById(secondId).orElseThrow();
+        assertEquals(secondRunAt.toInstant(), first.getRunAt().toInstant());
+        assertEquals(secondRunAt.toInstant(), second.getRunAt().toInstant());
+    }
+
+    @Test
+    void shouldReleaseGroupedJobsWhenFirstDueUnderKeepExistingPolicy() throws InterruptedException {
+        String groupId = "group-release-" + UUID.randomUUID();
+        OffsetDateTime firstRunAt = OffsetDateTime.now().plusSeconds(2).withNano(0);
+        OffsetDateTime delayedRunAt = OffsetDateTime.now().plusSeconds(45).withNano(0);
+        jobLatch = new CountDownLatch(2);
+
+        long startNanos = System.nanoTime();
+        UUID firstId = jobClient.enqueueAt(
+                "GROUP_RELEASE_ON_FIRST_DUE_JOB", new TestPayload("first"), 3, groupId, null, firstRunAt);
+        UUID secondId = jobClient.enqueueAt(
+                "GROUP_RELEASE_ON_FIRST_DUE_JOB", new TestPayload("second"), 3, groupId, null, delayedRunAt);
+
+        Job delayedBeforeRelease = jobRepository.findById(secondId).orElseThrow();
+        assertEquals(delayedRunAt.toInstant(), delayedBeforeRelease.getRunAt().toInstant());
+        assertTrue(
+                jobLatch.await(25, TimeUnit.SECONDS), "Both grouped jobs should run after the first one becomes due");
+
+        long elapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNanos);
+        assertTrue(
+                elapsedMs < 35_000,
+                "Grouped delayed job should not wait for its original long delay once group is released");
+
+        await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
+            assertEquals(
+                    "COMPLETED", jobRepository.findById(firstId).orElseThrow().getStatus());
+            assertEquals(
+                    "COMPLETED", jobRepository.findById(secondId).orElseThrow().getStatus());
         });
     }
 

@@ -39,11 +39,15 @@ public class JobTypeMetadataRegistry {
             com.jobq.annotation.Job.DeduplicationRunAtPolicy deduplicationRunAtPolicy = jobAnnotation != null
                     ? jobAnnotation.deduplicationRunAtPolicy()
                     : com.jobq.annotation.Job.DeduplicationRunAtPolicy.UPDATE_ON_REPLACE;
+            com.jobq.annotation.Job.GroupDelayPolicy groupDelayPolicy = jobAnnotation != null
+                    ? jobAnnotation.groupDelayPolicy()
+                    : com.jobq.annotation.Job.GroupDelayPolicy.KEEP_EXISTING_DELAY_RUN_ALL_ON_FIRST_DUE;
             register(
                     metadata,
                     jobType,
                     initialDelayMs,
                     deduplicationRunAtPolicy,
+                    groupDelayPolicy,
                     annotationMaxRetries,
                     "JobWorker bean " + ClassUtils.getUserClass(worker).getName());
             registerClassMapping(classMappings, workerClass, jobType, "JobWorker bean " + workerClass.getName());
@@ -70,6 +74,7 @@ public class JobTypeMetadataRegistry {
                     jobType,
                     initialDelayMs,
                     jobAnnotation.deduplicationRunAtPolicy(),
+                    jobAnnotation.groupDelayPolicy(),
                     sanitizeMaxRetries(jobAnnotation.maxRetries()),
                     "@Job bean " + ClassUtils.getUserClass(bean).getName());
             registerClassMapping(classMappings, beanClass, jobType, "@Job bean " + beanClass.getName());
@@ -89,6 +94,13 @@ public class JobTypeMetadataRegistry {
         return metadata == null
                 ? com.jobq.annotation.Job.DeduplicationRunAtPolicy.UPDATE_ON_REPLACE
                 : metadata.deduplicationRunAtPolicy();
+    }
+
+    public com.jobq.annotation.Job.GroupDelayPolicy groupDelayPolicyFor(String jobType) {
+        JobTypeMetadata metadata = metadataByType.get(jobType);
+        return metadata == null
+                ? com.jobq.annotation.Job.GroupDelayPolicy.KEEP_EXISTING_DELAY_RUN_ALL_ON_FIRST_DUE
+                : metadata.groupDelayPolicy();
     }
 
     public int defaultMaxRetriesFor(String jobType, int fallbackMaxRetries) {
@@ -126,13 +138,16 @@ public class JobTypeMetadataRegistry {
             String jobType,
             long initialDelayMs,
             com.jobq.annotation.Job.DeduplicationRunAtPolicy deduplicationRunAtPolicy,
+            com.jobq.annotation.Job.GroupDelayPolicy groupDelayPolicy,
             Integer annotationMaxRetries,
             String source) {
         JobTypeMetadata existing = metadata.putIfAbsent(
-                jobType, new JobTypeMetadata(initialDelayMs, deduplicationRunAtPolicy, annotationMaxRetries));
+                jobType,
+                new JobTypeMetadata(initialDelayMs, deduplicationRunAtPolicy, groupDelayPolicy, annotationMaxRetries));
         if (existing != null
                 && (existing.initialDelayMs() != initialDelayMs
                         || existing.deduplicationRunAtPolicy() != deduplicationRunAtPolicy
+                        || existing.groupDelayPolicy() != groupDelayPolicy
                         || !Objects.equals(existing.annotationMaxRetries(), annotationMaxRetries))) {
             throw new IllegalStateException("Job type '" + jobType
                     + "' has conflicting metadata between definitions while scanning "
@@ -191,5 +206,6 @@ public class JobTypeMetadataRegistry {
     private record JobTypeMetadata(
             long initialDelayMs,
             com.jobq.annotation.Job.DeduplicationRunAtPolicy deduplicationRunAtPolicy,
+            com.jobq.annotation.Job.GroupDelayPolicy groupDelayPolicy,
             Integer annotationMaxRetries) {}
 }

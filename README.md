@@ -294,6 +294,20 @@ Behavior:
 
 `groupId` is persisted and visible in the dashboard for routing/filtering use cases.
 
+Grouped scheduling behavior is configurable via `@Job.groupDelayPolicy`:
+
+```java
+@Job(groupDelayPolicy = Job.GroupDelayPolicy.SYNC_WITH_NEW_DELAY)
+class SyncGroupJob { ... }
+```
+
+Options:
+
+- `SYNC_WITH_NEW_DELAY`:
+  enqueueing a grouped job updates `run_at` for all active pending jobs of the same type/group to the new enqueue schedule.
+- `KEEP_EXISTING_DELAY_RUN_ALL_ON_FIRST_DUE` (default):
+  grouped jobs keep their own delays, but when the first grouped job becomes due, JobQ releases the remaining pending jobs in that group to run immediately.
+
 ### Deduplication (`replaceKey`)
 
 ```java

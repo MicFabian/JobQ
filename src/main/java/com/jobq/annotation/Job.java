@@ -44,6 +44,11 @@ public @interface Job {
     DeduplicationRunAtPolicy deduplicationRunAtPolicy() default DeduplicationRunAtPolicy.UPDATE_ON_REPLACE;
 
     /**
+     * Defines how grouped pending jobs align their schedule.
+     */
+    GroupDelayPolicy groupDelayPolicy() default GroupDelayPolicy.KEEP_EXISTING_DELAY_RUN_ALL_ON_FIRST_DUE;
+
+    /**
      * The maximum number of retries before a job is marked as FAILED permanently.
      */
     int maxRetries() default 3;
@@ -99,5 +104,20 @@ public @interface Job {
          * Replacement keeps the existing {@code runAt}.
          */
         KEEP_EXISTING
+    }
+
+    enum GroupDelayPolicy {
+        /**
+         * Whenever a grouped job is enqueued, all active pending jobs of the same
+         * type/group are synchronized to that enqueue's {@code runAt}.
+         */
+        SYNC_WITH_NEW_DELAY,
+
+        /**
+         * Existing grouped jobs keep their own delay. Once the first grouped job
+         * becomes due, all other pending jobs in that group are released to run
+         * immediately.
+         */
+        KEEP_EXISTING_DELAY_RUN_ALL_ON_FIRST_DUE
     }
 }

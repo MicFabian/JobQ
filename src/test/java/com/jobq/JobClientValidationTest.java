@@ -6,6 +6,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -20,6 +21,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.core.PreparedStatementSetter;
 
 class JobClientValidationTest {
 
@@ -183,5 +185,29 @@ class JobClientValidationTest {
     void shouldRejectNullRunAtForEnqueueAt() {
         assertThrows(
                 IllegalArgumentException.class, () -> jobClient.enqueueAt("TYPE", "payload", (OffsetDateTime) null));
+    }
+
+    @Test
+    void shouldSynchronizeGroupedRunAtWhenPolicyIsSyncWithNewDelay() {
+        OffsetDateTime runAt = OffsetDateTime.now().plusMinutes(5).withNano(0);
+        when(jobTypeMetadataRegistry.groupDelayPolicyFor("GROUP_SYNC_JOB"))
+                .thenReturn(com.jobq.annotation.Job.GroupDelayPolicy.SYNC_WITH_NEW_DELAY);
+        when(jdbcTemplate.update(anyString(), any(PreparedStatementSetter.class)))
+                .thenReturn(2);
+
+        jobClient.enqueueAt("GROUP_SYNC_JOB", "payload", 3, "group-a", null, runAt);
+
+        verify(jdbcTemplate).update(anyString(), any(PreparedStatementSetter.class));
+    }
+
+    @Test
+    void shouldNotSynchronizeGroupedRunAtWhenPolicyKeepsExistingDelay() {
+        OffsetDateTime runAt = OffsetDateTime.now().plusMinutes(5).withNano(0);
+        when(jobTypeMetadataRegistry.groupDelayPolicyFor("GROUP_KEEP_JOB"))
+                .thenReturn(com.jobq.annotation.Job.GroupDelayPolicy.KEEP_EXISTING_DELAY_RUN_ALL_ON_FIRST_DUE);
+
+        jobClient.enqueueAt("GROUP_KEEP_JOB", "payload", 3, "group-a", null, runAt);
+
+        verify(jdbcTemplate, never()).update(anyString(), any(PreparedStatementSetter.class));
     }
 }

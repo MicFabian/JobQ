@@ -397,5 +397,21 @@ public interface JobRepository extends JpaRepository<Job, UUID> {
             @Param("nextPriority") int nextPriority,
             @Param("lockedBy") String lockedBy);
 
+    @Modifying
+    @Query(
+            """
+            UPDATE Job j
+            SET j.runAt = :now,
+                j.updatedAt = :now
+            WHERE j.type = :type
+              AND j.groupId IN :groupIds
+              AND j.processingStartedAt IS NULL
+              AND j.finishedAt IS NULL
+              AND j.failedAt IS NULL
+              AND j.runAt > :now
+            """)
+    int releaseGroupedPendingJobs(
+            @Param("type") String type, @Param("groupIds") List<String> groupIds, @Param("now") OffsetDateTime now);
+
     boolean existsByTypeAndCronAndFinishedAtIsNullAndFailedAtIsNull(String type, String cron);
 }

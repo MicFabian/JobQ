@@ -166,6 +166,18 @@ public class JobPoller {
                     return List.<Job>of();
                 }
                 OffsetDateTime lockTime = OffsetDateTime.now();
+                if (shouldReleaseGroupedJobsWhenFirstDue(registration)) {
+                    List<String> dueGroupIds = extractActiveGroupIds(nextJobs);
+                    if (!dueGroupIds.isEmpty()) {
+                        int released = jobRepository.releaseGroupedPendingJobs(jobType, dueGroupIds, lockTime);
+                        if (released > 0) {
+                            nextJobs = jobRepository.findNextJobsForUpdate(jobType, PageRequest.of(0, batchSize));
+                            if (nextJobs.isEmpty()) {
+                                return List.<Job>of();
+                            }
+                        }
+                    }
+                }
                 for (Job j : nextJobs) {
                     j.setProcessingStartedAt(lockTime);
                     j.setFinishedAt(null);
@@ -199,6 +211,21 @@ public class JobPoller {
                 return;
             }
         }
+    }
+
+    private boolean shouldReleaseGroupedJobsWhenFirstDue(RegisteredJob registration) {
+        com.jobq.annotation.Job annotation = registration.annotation();
+        return annotation == null
+                || annotation.groupDelayPolicy()
+                        == com.jobq.annotation.Job.GroupDelayPolicy.KEEP_EXISTING_DELAY_RUN_ALL_ON_FIRST_DUE;
+    }
+
+    private List<String> extractActiveGroupIds(List<Job> jobs) {
+        return jobs.stream()
+                .map(Job::getGroupId)
+                .filter(groupId -> groupId != null && !groupId.isBlank())
+                .distinct()
+                .toList();
     }
 
     private int availableProcessingSlots() {
