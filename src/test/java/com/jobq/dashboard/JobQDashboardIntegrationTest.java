@@ -157,6 +157,7 @@ class JobQDashboardIntegrationTest {
                 .andExpect(status().isOk())
                 .andExpect(header().string("HX-Trigger", org.hamcrest.Matchers.containsString("\"hasNext\":false")))
                 .andExpect(content().string(org.hamcrest.Matchers.containsString("Runs ")))
+                .andExpect(content().string(org.hamcrest.Matchers.containsString("Run now")))
                 .andReturn()
                 .getResponse()
                 .getContentAsString();
@@ -230,6 +231,37 @@ class JobQDashboardIntegrationTest {
         assertNull(reloaded.getErrorMessage());
         assertNotNull(reloaded.getRunAt());
         assertNotNull(reloaded.getUpdatedAt());
+    }
+
+    @Test
+    void shouldRunDelayedPendingJobImmediately() throws Exception {
+        Job delayed = persistPending("delayed-email", OffsetDateTime.now().plusMinutes(15), 0, "mail", "customer-1");
+
+        mockMvc.perform(post("/jobq/htmx/job/" + delayed.getId() + "/run-now")
+                        .header("Authorization", basicAuthHeader()))
+                .andExpect(status().isOk())
+                .andExpect(header().string("HX-Trigger", "jobq-refresh"))
+                .andExpect(content().string(org.hamcrest.Matchers.containsString("queued to run immediately")));
+
+        Job reloaded = jobRepository.findById(delayed.getId()).orElseThrow();
+        assertNotNull(reloaded.getRunAt());
+        assertFalse(reloaded.getRunAt().isAfter(OffsetDateTime.now().plusSeconds(1)));
+        assertNotNull(reloaded.getUpdatedAt());
+    }
+
+    @Test
+    void shouldRejectRunNowForNonDelayedPendingJob() throws Exception {
+        Job readyNow = persistPending("already-ready", OffsetDateTime.now().minusMinutes(1), 0, "mail", "customer-2");
+
+        mockMvc.perform(post("/jobq/htmx/job/" + readyNow.getId() + "/run-now")
+                        .header("Authorization", basicAuthHeader()))
+                .andExpect(status().isOk())
+                .andExpect(content()
+                        .string(org.hamcrest.Matchers.containsString(
+                                "is not delayed in PENDING state and cannot be forced to run now")));
+
+        Job reloaded = jobRepository.findById(readyNow.getId()).orElseThrow();
+        assertTrue(reloaded.getRunAt().isBefore(OffsetDateTime.now()));
     }
 
     @Test

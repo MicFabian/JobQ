@@ -3,6 +3,7 @@ package com.jobq.dashboard;
 import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.not;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -174,6 +175,34 @@ class JobQHtmxControllerTest {
     }
 
     @Test
+    void shouldRenderRunNowButtonForDelayedPendingJobs() throws Exception {
+        JobRepository.DashboardJobView job = dashboardRow(
+                UUID.randomUUID(),
+                "com.example.DelayedJob",
+                OffsetDateTime.now().minusMinutes(2),
+                OffsetDateTime.now().plusMinutes(10),
+                0,
+                3,
+                0,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null);
+
+        Page<JobRepository.DashboardJobView> jobPage = new PageImpl<>(List.of(job));
+        when(jobRepository.findDashboardJobViews(
+                        anyString(), anyString(), anyBoolean(), anyBoolean(), anyBoolean(), any(), any(Pageable.class)))
+                .thenReturn(jobPage);
+
+        mockMvc.perform(get("/jobq/htmx/jobs").param("status", "PENDING"))
+                .andExpect(status().isOk())
+                .andExpect(content().string(containsString("Run now")))
+                .andExpect(content().string(containsString("/run-now")));
+    }
+
+    @Test
     void shouldReturnHtmlForPaginationControls() throws Exception {
         when(jobRepository.findDashboardJobViews(
                         anyString(), anyString(), anyBoolean(), anyBoolean(), anyBoolean(), any(), any(Pageable.class)))
@@ -342,6 +371,22 @@ class JobQHtmxControllerTest {
     }
 
     @Test
+    void shouldRenderRunNowButtonInDetailsModalForDelayedPendingJob() throws Exception {
+        UUID jobId = UUID.randomUUID();
+        Job job = new Job();
+        job.setId(jobId);
+        job.setType("com.example.DelayedJob");
+        job.setRunAt(OffsetDateTime.now().plusMinutes(10));
+
+        when(jobRepository.findById(eq(jobId))).thenReturn(Optional.of(job));
+
+        mockMvc.perform(get("/jobq/htmx/job/" + jobId))
+                .andExpect(status().isOk())
+                .andExpect(content().string(containsString("Run Now")))
+                .andExpect(content().string(containsString("/job/" + jobId + "/run-now")));
+    }
+
+    @Test
     void shouldRetryFailedJobFromEndpoint() throws Exception {
         UUID jobId = UUID.randomUUID();
         Job job = new Job();
@@ -413,6 +458,46 @@ class JobQHtmxControllerTest {
         mockMvc.perform(post("/jobq/htmx/job/" + missingId + "/restart"))
                 .andExpect(status().isOk())
                 .andExpect(content().string(containsString("Job not found")));
+    }
+
+    @Test
+    void shouldRunDelayedPendingJobImmediatelyFromEndpoint() throws Exception {
+        UUID jobId = UUID.randomUUID();
+        Job job = new Job();
+        job.setId(jobId);
+        job.setRunAt(OffsetDateTime.now().plusMinutes(5));
+
+        when(jobRepository.findById(eq(jobId))).thenReturn(Optional.of(job));
+        when(jobRepository.save(any(Job.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        mockMvc.perform(post("/jobq/htmx/job/" + jobId + "/run-now"))
+                .andExpect(status().isOk())
+                .andExpect(header().string("HX-Trigger", "jobq-refresh"))
+                .andExpect(content().string(containsString("queued to run immediately")));
+
+        ArgumentCaptor<Job> captor = ArgumentCaptor.forClass(Job.class);
+        verify(jobRepository).save(captor.capture());
+        Job updated = captor.getValue();
+        assertNotNull(updated.getRunAt());
+        assertFalse(updated.getRunAt().isAfter(OffsetDateTime.now().plusSeconds(1)));
+        assertNotNull(updated.getUpdatedAt());
+    }
+
+    @Test
+    void shouldRejectRunNowWhenJobIsNotDelayedPending() throws Exception {
+        UUID jobId = UUID.randomUUID();
+        Job job = new Job();
+        job.setId(jobId);
+        job.setRunAt(OffsetDateTime.now().minusMinutes(1));
+
+        when(jobRepository.findById(eq(jobId))).thenReturn(Optional.of(job));
+
+        mockMvc.perform(post("/jobq/htmx/job/" + jobId + "/run-now"))
+                .andExpect(status().isOk())
+                .andExpect(content()
+                        .string(containsString("is not delayed in PENDING state and cannot be forced to run now")));
+
+        verify(jobRepository, never()).save(any(Job.class));
     }
 
     @Test

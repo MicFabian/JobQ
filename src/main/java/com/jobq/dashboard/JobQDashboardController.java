@@ -175,7 +175,7 @@ public class JobQDashboardController {
                 String statusLabel = resolveStatus(job);
                 String timeline = formatTimeline(job, statusLabel, now);
                 String failedInfo = formatFailedInfo(job);
-                String rowActionButton = rowActionButtonHtml(statusLabel, job.getId());
+                String rowActionButton = rowActionButtonHtml(statusLabel, job.getId(), job.getRunAt(), now);
                 rows.append(
                         """
                                 <tr class="hover:bg-slate-800/50 transition-colors border-b border-slate-800/50 group cursor-pointer"
@@ -439,6 +439,42 @@ public class JobQDashboardController {
                 .body(body);
     }
 
+    @PostMapping(value = "/job/{id}/run-now", produces = MediaType.TEXT_HTML_VALUE)
+    public ResponseEntity<String> runJobNow(@PathVariable("id") UUID id) {
+        OffsetDateTime now = OffsetDateTime.now();
+        String body = jobRepository
+                .findById(id)
+                .map(job -> {
+                    if (!isDelayedPending(
+                            job.getProcessingStartedAt(),
+                            job.getFinishedAt(),
+                            job.getFailedAt(),
+                            job.getRunAt(),
+                            now)) {
+                        return """
+                        <div class="p-4 text-center text-amber-300 font-semibold">
+                            Job %s is not delayed in PENDING state and cannot be forced to run now.
+                        </div>
+                        """
+                                .formatted(id.toString().substring(0, 8));
+                    }
+                    job.setRunAt(now);
+                    job.setUpdatedAt(now);
+                    jobRepository.save(job);
+                    return """
+                    <div class="p-4 text-center text-emerald-400 font-semibold">
+                        ✅ Job %s has been queued to run immediately.
+                    </div>
+                    """
+                            .formatted(id.toString().substring(0, 8));
+                })
+                .orElse("<div class='p-4 text-red-500'>Job not found.</div>");
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CONTENT_TYPE, MediaType.TEXT_HTML_VALUE)
+                .header("HX-Trigger", "jobq-refresh")
+                .body(body);
+    }
+
     private String getBadgeClass(String status) {
         return switch (status) {
             case "PENDING" -> "bg-blue-500/10 text-blue-400 border-blue-500/20";
@@ -468,6 +504,20 @@ public class JobQDashboardController {
     }
 
     private String restartButtonHtml(Job job) {
+        OffsetDateTime now = OffsetDateTime.now();
+        if (isDelayedPending(
+                job.getProcessingStartedAt(), job.getFinishedAt(), job.getFailedAt(), job.getRunAt(), now)) {
+            return """
+                    <div class="mt-6 pt-6 border-t border-slate-800">
+                        <button class="w-full px-4 py-3 bg-blue-600 hover:bg-blue-500 text-white font-semibold rounded-lg transition-colors flex items-center justify-center gap-2"
+                                hx-post="/jobq/htmx/job/%s/run-now" hx-target="#modal-container" hx-swap="innerHTML" hx-indicator="#jobq-loading-indicator">
+                            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M13 10V3L4 14h7v7l9-11h-7z'></path></svg>
+                            Run Now
+                        </button>
+                    </div>
+                    """
+                    .formatted(job.getId().toString());
+        }
         if ("FAILED".equals(job.getStatus())) {
             return """
                     <div class="mt-6 pt-6 border-t border-slate-800">
@@ -495,7 +545,20 @@ public class JobQDashboardController {
         return "";
     }
 
-    private String rowActionButtonHtml(String status, UUID id) {
+    private String rowActionButtonHtml(String status, UUID id, OffsetDateTime runAt, OffsetDateTime now) {
+        if ("PENDING".equals(status) && runAt != null && runAt.isAfter(now)) {
+            return """
+                    <button class="px-2.5 py-1 rounded-md border border-blue-500/30 bg-blue-500/10 text-blue-300 text-xs font-semibold hover:bg-blue-500/20 transition-colors"
+                            hx-post="/jobq/htmx/job/%s/run-now"
+                            hx-target="#modal-container"
+                            hx-swap="innerHTML"
+                            hx-indicator="#jobq-loading-indicator"
+                            hx-on:click="event.stopPropagation()">
+                        Run now
+                    </button>
+                    """
+                    .formatted(id.toString());
+        }
         if ("FAILED".equals(status)) {
             return """
                     <button class="px-2.5 py-1 rounded-md border border-rose-500/30 bg-rose-500/10 text-rose-300 text-xs font-semibold hover:bg-rose-500/20 transition-colors"
@@ -523,6 +586,19 @@ public class JobQDashboardController {
                     .formatted(id.toString());
         }
         return "";
+    }
+
+    private boolean isDelayedPending(
+            OffsetDateTime processingStartedAt,
+            OffsetDateTime finishedAt,
+            OffsetDateTime failedAt,
+            OffsetDateTime runAt,
+            OffsetDateTime now) {
+        return processingStartedAt == null
+                && finishedAt == null
+                && failedAt == null
+                && runAt != null
+                && runAt.isAfter(now);
     }
 
     private String formatFailedInfo(JobRepository.DashboardJobView job) {
