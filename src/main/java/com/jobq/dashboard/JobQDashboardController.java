@@ -7,6 +7,7 @@ import com.jobq.Job;
 import com.jobq.JobRepository;
 import java.time.OffsetDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.Locale;
 import java.util.UUID;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.data.domain.PageRequest;
@@ -805,8 +806,9 @@ public class JobQDashboardController {
         if (rawStatus == null) {
             return "";
         }
-        return switch (rawStatus) {
-            case "PENDING", "PROCESSING", "COMPLETED", "FAILED" -> rawStatus;
+        String normalized = rawStatus.trim().toUpperCase(Locale.ROOT);
+        return switch (normalized) {
+            case "PENDING", "PROCESSING", "COMPLETED", "FAILED" -> normalized;
             default -> "";
         };
     }

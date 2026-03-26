@@ -354,6 +354,25 @@ class JobQHtmxControllerTest {
     }
 
     @Test
+    void shouldNormalizeMixedCaseStatusFilterBeforeQuery() throws Exception {
+        when(jobRepository.findDashboardJobViews(
+                        anyString(), anyString(), anyBoolean(), anyBoolean(), anyBoolean(), any(), any(Pageable.class)))
+                .thenReturn(Page.empty());
+
+        mockMvc.perform(get("/jobq/htmx/jobs").param("status", "Failed")).andExpect(status().isOk());
+
+        verify(jobRepository)
+                .findDashboardJobViews(
+                        eq("FAILED"),
+                        anyString(),
+                        eq(false),
+                        eq(false),
+                        eq(false),
+                        eq(new UUID(0L, 0L)),
+                        any(Pageable.class));
+    }
+
+    @Test
     void shouldReturnHtmlForJobDetailsModal() throws Exception {
         UUID jobId = UUID.randomUUID();
         Job job = new Job();

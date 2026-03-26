@@ -94,6 +94,17 @@ public interface JobRepository extends JpaRepository<Job, UUID> {
                 OR LOWER(j.type) LIKE LOWER(CONCAT('%', :query, '%'))
                 OR LOWER(COALESCE(j.groupId, '')) LIKE LOWER(CONCAT('%', :query, '%'))
                 OR LOWER(COALESCE(j.replaceKey, '')) LIKE LOWER(CONCAT('%', :query, '%'))
+                OR LOWER(COALESCE(j.errorMessage, '')) LIKE LOWER(CONCAT('%', :query, '%'))
+                OR (LOWER(:query) = 'pending'
+                    AND j.processingStartedAt IS NULL
+                    AND j.finishedAt IS NULL
+                    AND j.failedAt IS NULL)
+                OR (LOWER(:query) = 'processing'
+                    AND j.processingStartedAt IS NOT NULL
+                    AND j.finishedAt IS NULL
+                    AND j.failedAt IS NULL)
+                OR (LOWER(:query) = 'completed' AND j.finishedAt IS NOT NULL)
+                OR (LOWER(:query) = 'failed' AND j.failedAt IS NOT NULL)
                 OR (:jobIdProvided = true AND j.id = :jobId)
               )
             """)

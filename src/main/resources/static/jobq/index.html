@@ -41,6 +41,24 @@
             }
         }
 
+        function jobqSetQuery(value) {
+            const queryInput = document.querySelector('input[name=query]');
+            if (queryInput) {
+                queryInput.value = value || '';
+            }
+        }
+
+        function jobqSyncFilters() {
+            const queryVisible = document.querySelector('input[name=queryInput]');
+            const statusFilter = document.querySelector('select[name=statusFilter]');
+            if (queryVisible) {
+                jobqSetQuery(queryVisible.value);
+            }
+            if (statusFilter) {
+                document.querySelectorAll('input[name=status]').forEach(e => e.value = statusFilter.value || '');
+            }
+        }
+
         function jobqMovePage(delta) {
             const pageInput = document.querySelector('input[name=page]');
             const current = pageInput ? (parseInt(pageInput.value || '0', 10) || 0) : 0;
@@ -53,6 +71,7 @@
         }
 
         function jobqRefresh(resetPage) {
+            jobqSyncFilters();
             if (resetPage) {
                 jobqSetPage(0);
             }
@@ -60,7 +79,7 @@
         }
 
         function jobqClearFilters() {
-            const search = document.querySelector('input[name=query]');
+            const search = document.querySelector('input[name=queryInput]');
             const statusFilter = document.querySelector('select[name=statusFilter]');
             const sort = document.querySelector('select[name=sort]');
             const scheduledOnly = document.querySelector('input[name=scheduledOnly]');
@@ -68,6 +87,7 @@
             const size = document.querySelector('select[name=size]');
             const status = document.querySelector('input[name=status]');
             if (search) search.value = '';
+            jobqSetQuery('');
             if (statusFilter) statusFilter.value = '';
             if (sort) sort.value = 'created-desc';
             if (scheduledOnly) scheduledOnly.checked = false;
@@ -105,6 +125,10 @@
             if (nextButton) {
                 nextButton.disabled = !hasNext;
             }
+        });
+
+        document.addEventListener('htmx:beforeRequest', () => {
+            jobqSyncFilters();
         });
     </script>
     <!-- Google Fonts -->
@@ -198,6 +222,7 @@
 
         <input type="hidden" name="status" value="">
         <input type="hidden" name="page" value="0">
+        <input type="hidden" name="query" value="">
 
         <!-- Stats Container (Auto-refreshes every 5s) -->
         <div id="stats-container" hx-get="/jobq/htmx/stats"
@@ -210,9 +235,10 @@
             <div class="flex flex-wrap items-end gap-3">
                 <div class="min-w-[16rem] flex-1 lg:min-w-[20rem]">
                     <label class="block text-[11px] uppercase tracking-wider text-slate-500 mb-1">Search</label>
-                    <input type="text" name="query" placeholder="Type, group, key or full UUID"
+                    <input type="text" name="queryInput" placeholder="Type, group, key, status, error or full UUID"
                         class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500/60"
-                        oninput="jobqHandleSearchInput()" onkeydown="if(event.key==='Enter'){event.preventDefault();jobqRefresh(true)}">
+                        oninput="jobqSetQuery(this.value);jobqHandleSearchInput()"
+                        onkeydown="if(event.key==='Enter'){event.preventDefault();jobqSetQuery(this.value);jobqRefresh(true)}">
                 </div>
                 <div class="w-full sm:w-44">
                     <label class="block text-[11px] uppercase tracking-wider text-slate-500 mb-1">Status</label>

@@ -172,6 +172,82 @@ class JobQDashboardIntegrationTest {
     }
 
     @Test
+    void shouldFilterByStatusCaseInsensitively() throws Exception {
+        persistFailed("status-failed-job", "boom", 1);
+        persistCompleted("status-completed-job");
+
+        String html = mockMvc.perform(get("/jobq/htmx/jobs")
+                        .header("Authorization", basicAuthHeader())
+                        .param("status", "Failed")
+                        .param("size", "20")
+                        .param("page", "0"))
+                .andExpect(status().isOk())
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+
+        assertTrue(html.contains("status-failed-job"));
+        assertFalse(html.contains("status-completed-job"));
+    }
+
+    @Test
+    void shouldSearchByFailureMessage() throws Exception {
+        persistFailed("invoice-email-job", "SMTP timeout while sending welcome email", 2);
+        persistFailed("invoice-pdf-job", "PDF generation failed", 1);
+
+        String html = mockMvc.perform(get("/jobq/htmx/jobs")
+                        .header("Authorization", basicAuthHeader())
+                        .param("query", "welcome email")
+                        .param("size", "20")
+                        .param("page", "0"))
+                .andExpect(status().isOk())
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+
+        assertTrue(html.contains("invoice-email-job"));
+        assertFalse(html.contains("invoice-pdf-job"));
+    }
+
+    @Test
+    void shouldSearchByType() throws Exception {
+        persistCompleted("send-welcome-email");
+        persistCompleted("generate-report");
+
+        String html = mockMvc.perform(get("/jobq/htmx/jobs")
+                        .header("Authorization", basicAuthHeader())
+                        .param("query", "send-welcome")
+                        .param("size", "20")
+                        .param("page", "0"))
+                .andExpect(status().isOk())
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+
+        assertTrue(html.contains("send-welcome-email"));
+        assertFalse(html.contains("generate-report"));
+    }
+
+    @Test
+    void shouldSearchByStatusKeyword() throws Exception {
+        persistFailed("keyword-failed-job", "boom", 1);
+        persistCompleted("keyword-completed-job");
+
+        String html = mockMvc.perform(get("/jobq/htmx/jobs")
+                        .header("Authorization", basicAuthHeader())
+                        .param("query", "failed")
+                        .param("size", "20")
+                        .param("page", "0"))
+                .andExpect(status().isOk())
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+
+        assertTrue(html.contains("keyword-failed-job"));
+        assertFalse(html.contains("keyword-completed-job"));
+    }
+
+    @Test
     void shouldReportPaginationHasNextWhenMoreRowsExist() throws Exception {
         persistPending("p1", OffsetDateTime.now().plusMinutes(1), 0, null, null);
         persistPending("p2", OffsetDateTime.now().plusMinutes(2), 0, null, null);
