@@ -5,8 +5,14 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.jobq.Job;
 import com.jobq.JobRepository;
+import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
+import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeParseException;
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Locale;
 import java.util.UUID;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -34,6 +40,7 @@ public class JobQDashboardController {
     private static final DateTimeFormatter EXACT_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
     private static final UUID ZERO_UUID = new UUID(0L, 0L);
     private static final int MAX_QUERY_LENGTH = 200;
+    private static final int MAX_BATCH_IDS = 2_000;
 
     public JobQDashboardController(JobRepository jobRepository, ObjectMapper objectMapper) {
         this.jobRepository = jobRepository;
@@ -162,7 +169,7 @@ public class JobQDashboardController {
             rows.append(
                     """
                             <tr>
-                              <td colspan="9" class="px-6 py-12 text-center text-slate-400">
+                              <td colspan="10" class="px-6 py-12 text-center text-slate-400">
                                 <div class="flex flex-col items-center justify-center">
                                   <svg class="w-10 h-10 mb-3 opacity-50" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4"></path></svg>
                                   <span class="text-lg font-medium">No jobs found %s</span>
@@ -180,7 +187,17 @@ public class JobQDashboardController {
                 rows.append(
                         """
                                 <tr class="hover:bg-slate-800/50 transition-colors border-b border-slate-800/50 group cursor-pointer"
+                                    data-job-id="%s"
                                     hx-get="/jobq/htmx/job/%s" hx-target="#modal-container" hx-swap="innerHTML" hx-indicator="#jobq-loading-indicator">
+                                    <td class="px-3 py-3">
+                                        <input type="checkbox"
+                                               class="jobq-select-row rounded border-slate-600 bg-slate-900 text-indigo-500"
+                                               value="%s"
+                                               aria-label="Select job for batch rerun"
+                                               title="Select job for batch rerun"
+                                               onchange="jobqToggleRowSelection(this)"
+                                               onclick="event.stopPropagation()">
+                                    </td>
                                     <td class="px-6 py-3">
                                         <span class="px-2.5 py-1 rounded-full text-xs font-medium border %s">
                                             %s
@@ -207,6 +224,8 @@ public class JobQDashboardController {
                                 </tr>
                                 """
                                 .formatted(
+                                        job.getId().toString(),
+                                        job.getId().toString(),
                                         job.getId().toString(),
                                         getBadgeClass(statusLabel),
                                         statusLabel,
@@ -409,7 +428,7 @@ public class JobQDashboardController {
                     boolean completed = job.getFinishedAt() != null;
                     if (!failed && !completed) {
                         return """
-                        <div class="p-4 text-center text-amber-300 font-semibold">
+                        <div class="pointer-events-auto mb-3 rounded-xl border border-amber-500/30 bg-slate-900/95 px-4 py-3 text-center text-amber-300 font-semibold shadow-2xl backdrop-blur-sm">
                             Job %s is not in COMPLETED or FAILED state and cannot be rerun.
                         </div>
                         """
@@ -427,13 +446,90 @@ public class JobQDashboardController {
                     job.setUpdatedAt(java.time.OffsetDateTime.now());
                     jobRepository.save(job);
                     return """
-                    <div class="p-4 text-center text-emerald-400 font-semibold">
+                    <div class="pointer-events-auto mb-3 rounded-xl border border-emerald-500/30 bg-slate-900/95 px-4 py-3 text-center text-emerald-300 font-semibold shadow-2xl backdrop-blur-sm">
                         ✅ Job %s has been queued for %s. It will be picked up on the next poll cycle.
                     </div>
                     """
                             .formatted(id.toString().substring(0, 8), failed ? "retry" : "rerun");
                 })
                 .orElse("<div class='p-4 text-red-500'>Job not found.</div>");
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CONTENT_TYPE, MediaType.TEXT_HTML_VALUE)
+                .header("HX-Trigger", "jobq-refresh")
+                .body(body);
+    }
+
+    @PostMapping(value = "/jobs/rerun-selected", produces = MediaType.TEXT_HTML_VALUE)
+    public ResponseEntity<String> rerunSelectedJobs(
+            @RequestParam(name = "selectedIds", required = false, defaultValue = "") String selectedIdsRaw) {
+        List<UUID> selectedIds = parseSelectedIds(selectedIdsRaw);
+        if (selectedIds.isEmpty()) {
+            return ResponseEntity.ok()
+                    .header(HttpHeaders.CONTENT_TYPE, MediaType.TEXT_HTML_VALUE)
+                    .body(
+                            """
+                          <div class="pointer-events-auto mb-3 rounded-xl border border-amber-500/30 bg-slate-900/95 px-4 py-3 text-center text-amber-300 font-semibold shadow-2xl backdrop-blur-sm">
+                              Select at least one COMPLETED or FAILED job to rerun.
+                          </div>
+                          """);
+        }
+
+        OffsetDateTime now = OffsetDateTime.now();
+        int queued = jobRepository.rerunTerminalJobsByIds(selectedIds, now);
+        int skipped = selectedIds.size() - queued;
+        String body =
+                """
+                <div class="pointer-events-auto mb-3 rounded-xl border border-emerald-500/30 bg-slate-900/95 px-4 py-3 text-center text-emerald-300 font-semibold shadow-2xl backdrop-blur-sm">
+                    ✅ Queued %d selected job%s for rerun%s.
+                </div>
+                """
+                        .formatted(
+                                queued,
+                                queued == 1 ? "" : "s",
+                                skipped > 0 ? " (%d skipped: not found or not terminal)".formatted(skipped) : "");
+
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CONTENT_TYPE, MediaType.TEXT_HTML_VALUE)
+                .header("HX-Trigger", "{\"jobq-refresh\":true,\"jobqSelectionCleared\":true}")
+                .body(body);
+    }
+
+    @PostMapping(value = "/jobs/rerun-failed-since", produces = MediaType.TEXT_HTML_VALUE)
+    public ResponseEntity<String> rerunFailedJobsSince(
+            @RequestParam(name = "failedSince", required = false, defaultValue = "") String failedSinceRaw,
+            @RequestParam(name = "query", required = false, defaultValue = "") String query,
+            @RequestParam(name = "retriedOnly", required = false, defaultValue = "false") boolean retriedOnly) {
+        OffsetDateTime failedSince = parseFailedSince(failedSinceRaw);
+        if (failedSince == null) {
+            return ResponseEntity.ok()
+                    .header(HttpHeaders.CONTENT_TYPE, MediaType.TEXT_HTML_VALUE)
+                    .body(
+                            """
+                          <div class="pointer-events-auto mb-3 rounded-xl border border-amber-500/30 bg-slate-900/95 px-4 py-3 text-center text-amber-300 font-semibold shadow-2xl backdrop-blur-sm">
+                              Provide a valid timestamp for the failed-since batch rerun.
+                          </div>
+                          """);
+        }
+
+        OffsetDateTime now = OffsetDateTime.now();
+        String normalizedQuery = normalizeQuery(query);
+        UUID queriedJobId = parseUuid(normalizedQuery);
+        boolean jobIdProvided = queriedJobId != null;
+        int queued = jobRepository.rerunFailedJobsByFilterSince(
+                normalizedQuery,
+                retriedOnly,
+                jobIdProvided,
+                jobIdProvided ? queriedJobId : ZERO_UUID,
+                failedSince,
+                now);
+        String body =
+                """
+                <div class="pointer-events-auto mb-3 rounded-xl border border-emerald-500/30 bg-slate-900/95 px-4 py-3 text-center text-emerald-300 font-semibold shadow-2xl backdrop-blur-sm">
+                    ✅ Queued %d failed job%s since %s for rerun.
+                </div>
+                """
+                        .formatted(queued, queued == 1 ? "" : "s", failedSince.format(EXACT_FORMATTER));
+
         return ResponseEntity.ok()
                 .header(HttpHeaders.CONTENT_TYPE, MediaType.TEXT_HTML_VALUE)
                 .header("HX-Trigger", "jobq-refresh")
@@ -453,7 +549,7 @@ public class JobQDashboardController {
                             job.getRunAt(),
                             now)) {
                         return """
-                        <div class="p-4 text-center text-amber-300 font-semibold">
+                        <div class="pointer-events-auto mb-3 rounded-xl border border-amber-500/30 bg-slate-900/95 px-4 py-3 text-center text-amber-300 font-semibold shadow-2xl backdrop-blur-sm">
                             Job %s is not delayed in PENDING state and cannot be forced to run now.
                         </div>
                         """
@@ -463,7 +559,7 @@ public class JobQDashboardController {
                     job.setUpdatedAt(now);
                     jobRepository.save(job);
                     return """
-                    <div class="p-4 text-center text-emerald-400 font-semibold">
+                    <div class="pointer-events-auto mb-3 rounded-xl border border-emerald-500/30 bg-slate-900/95 px-4 py-3 text-center text-emerald-300 font-semibold shadow-2xl backdrop-blur-sm">
                         ✅ Job %s has been queued to run immediately.
                     </div>
                     """
@@ -511,7 +607,8 @@ public class JobQDashboardController {
             return """
                     <div class="mt-6 pt-6 border-t border-slate-800">
                         <button class="w-full px-4 py-3 bg-blue-600 hover:bg-blue-500 text-white font-semibold rounded-lg transition-colors flex items-center justify-center gap-2"
-                                hx-post="/jobq/htmx/job/%s/run-now" hx-target="#modal-container" hx-swap="innerHTML" hx-indicator="#jobq-loading-indicator">
+                                hx-post="/jobq/htmx/job/%s/run-now" hx-target="#jobq-action-feedback" hx-swap="innerHTML" hx-indicator="#jobq-loading-indicator"
+                                hx-on:afterRequest="document.getElementById('modal-container').innerHTML=''">
                             <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M13 10V3L4 14h7v7l9-11h-7z'></path></svg>
                             Run Now
                         </button>
@@ -523,7 +620,8 @@ public class JobQDashboardController {
             return """
                     <div class="mt-6 pt-6 border-t border-slate-800">
                         <button class="w-full px-4 py-3 bg-indigo-600 hover:bg-indigo-500 text-white font-semibold rounded-lg transition-colors flex items-center justify-center gap-2"
-                                hx-post="/jobq/htmx/job/%s/rerun" hx-target="#modal-container" hx-swap="innerHTML" hx-indicator="#jobq-loading-indicator">
+                                hx-post="/jobq/htmx/job/%s/rerun" hx-target="#jobq-action-feedback" hx-swap="innerHTML" hx-indicator="#jobq-loading-indicator"
+                                hx-on:afterRequest="document.getElementById('modal-container').innerHTML=''">
                             <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path></svg>
                             Retry Job
                         </button>
@@ -535,7 +633,8 @@ public class JobQDashboardController {
             return """
                     <div class="mt-6 pt-6 border-t border-slate-800">
                         <button class="w-full px-4 py-3 bg-emerald-600 hover:bg-emerald-500 text-white font-semibold rounded-lg transition-colors flex items-center justify-center gap-2"
-                                hx-post="/jobq/htmx/job/%s/rerun" hx-target="#modal-container" hx-swap="innerHTML" hx-indicator="#jobq-loading-indicator">
+                                hx-post="/jobq/htmx/job/%s/rerun" hx-target="#jobq-action-feedback" hx-swap="innerHTML" hx-indicator="#jobq-loading-indicator"
+                                hx-on:afterRequest="document.getElementById('modal-container').innerHTML=''">
                             <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path></svg>
                             Rerun Job
                         </button>
@@ -551,7 +650,7 @@ public class JobQDashboardController {
             return """
                     <button class="px-2.5 py-1 rounded-md border border-blue-500/30 bg-blue-500/10 text-blue-300 text-xs font-semibold hover:bg-blue-500/20 transition-colors"
                             hx-post="/jobq/htmx/job/%s/run-now"
-                            hx-target="#modal-container"
+                            hx-target="#jobq-action-feedback"
                             hx-swap="innerHTML"
                             hx-indicator="#jobq-loading-indicator"
                             hx-on:click="event.stopPropagation()">
@@ -564,7 +663,7 @@ public class JobQDashboardController {
             return """
                     <button class="px-2.5 py-1 rounded-md border border-rose-500/30 bg-rose-500/10 text-rose-300 text-xs font-semibold hover:bg-rose-500/20 transition-colors"
                             hx-post="/jobq/htmx/job/%s/rerun"
-                            hx-target="#modal-container"
+                            hx-target="#jobq-action-feedback"
                             hx-swap="innerHTML"
                             hx-indicator="#jobq-loading-indicator"
                             hx-on:click="event.stopPropagation()">
@@ -577,7 +676,7 @@ public class JobQDashboardController {
             return """
                     <button class="px-2.5 py-1 rounded-md border border-emerald-500/30 bg-emerald-500/10 text-emerald-300 text-xs font-semibold hover:bg-emerald-500/20 transition-colors"
                             hx-post="/jobq/htmx/job/%s/rerun"
-                            hx-target="#modal-container"
+                            hx-target="#jobq-action-feedback"
                             hx-swap="innerHTML"
                             hx-indicator="#jobq-loading-indicator"
                             hx-on:click="event.stopPropagation()">
@@ -754,6 +853,46 @@ public class JobQDashboardController {
             normalized = normalized.substring(0, MAX_QUERY_LENGTH);
         }
         return normalized;
+    }
+
+    private List<UUID> parseSelectedIds(String rawSelectedIds) {
+        if (rawSelectedIds == null || rawSelectedIds.isBlank()) {
+            return List.of();
+        }
+        LinkedHashSet<UUID> uniqueIds = new LinkedHashSet<>();
+        String[] parts = rawSelectedIds.split("[,\\s]+");
+        for (String part : parts) {
+            if (part == null || part.isBlank()) {
+                continue;
+            }
+            try {
+                uniqueIds.add(UUID.fromString(part.trim()));
+            } catch (IllegalArgumentException ignored) {
+                // Ignore malformed ids from the client.
+            }
+            if (uniqueIds.size() >= MAX_BATCH_IDS) {
+                break;
+            }
+        }
+        return new ArrayList<>(uniqueIds);
+    }
+
+    private OffsetDateTime parseFailedSince(String rawFailedSince) {
+        if (rawFailedSince == null || rawFailedSince.isBlank()) {
+            return null;
+        }
+        String normalized = rawFailedSince.trim();
+        try {
+            return OffsetDateTime.parse(normalized);
+        } catch (DateTimeParseException ignored) {
+            // Fall through and attempt local date-time parsing.
+        }
+        try {
+            LocalDateTime localDateTime = LocalDateTime.parse(normalized);
+            return localDateTime.atZone(ZoneId.systemDefault()).toOffsetDateTime();
+        } catch (DateTimeParseException ignored) {
+            return null;
+        }
     }
 
     private String normalizeSort(String rawSort) {

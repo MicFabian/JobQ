@@ -86,6 +86,7 @@
             const retriedOnly = document.querySelector('input[name=retriedOnly]');
             const size = document.querySelector('select[name=size]');
             const status = document.querySelector('input[name=status]');
+            const failedSince = document.querySelector('input[name=failedSince]');
             if (search) search.value = '';
             jobqSetQuery('');
             if (statusFilter) statusFilter.value = '';
@@ -94,7 +95,157 @@
             if (retriedOnly) retriedOnly.checked = false;
             if (size) size.value = '50';
             if (status) status.value = '';
+            if (failedSince) failedSince.value = '';
+            jobqClearSelection();
             jobqRefresh(true);
+        }
+
+        const jobqSelectedIds = new Set();
+
+        function jobqFormatLocalDateTime(date) {
+            const pad = (value) => String(value).padStart(2, '0');
+            return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+        }
+
+        function jobqSetFailedSincePreset(hoursBack) {
+            const failedSinceInput = document.querySelector('input[name=failedSince]');
+            if (!failedSinceInput) {
+                return;
+            }
+            const presetDate = new Date(Date.now() - (hoursBack * 60 * 60 * 1000));
+            failedSinceInput.value = jobqFormatLocalDateTime(presetDate);
+            jobqSyncBatchActionState();
+        }
+
+        function jobqSyncBatchActionState() {
+            const failedSinceInput = document.querySelector('input[name=failedSince]');
+            const rerunFailedSinceButton = document.getElementById('jobq-rerun-failed-since');
+            if (!rerunFailedSinceButton) {
+                return;
+            }
+            const failedSinceValue = failedSinceInput ? failedSinceInput.value.trim() : '';
+            const enabled = failedSinceValue.length > 0;
+            rerunFailedSinceButton.disabled = !enabled;
+            if (enabled) {
+                rerunFailedSinceButton.setAttribute(
+                    'hx-confirm',
+                    `Rerun FAILED jobs since ${failedSinceValue.replace('T', ' ')} using the current filters?`
+                );
+            } else {
+                rerunFailedSinceButton.removeAttribute('hx-confirm');
+            }
+        }
+
+        function jobqSyncSelectionState() {
+            const selectedIdsInput = document.querySelector('input[name=selectedIds]');
+            if (selectedIdsInput) {
+                selectedIdsInput.value = Array.from(jobqSelectedIds).join(',');
+            }
+
+            const count = jobqSelectedIds.size;
+            const countLabel = document.getElementById('jobq-selected-count');
+            if (countLabel) {
+                countLabel.textContent = `${count} selected`;
+            }
+
+            const rerunSelectedButton = document.getElementById('jobq-rerun-selected');
+            if (rerunSelectedButton) {
+                rerunSelectedButton.disabled = count === 0;
+                if (count > 0) {
+                    rerunSelectedButton.setAttribute(
+                        'hx-confirm',
+                        `Rerun ${count} selected terminal job${count === 1 ? '' : 's'} now?`
+                    );
+                } else {
+                    rerunSelectedButton.removeAttribute('hx-confirm');
+                }
+            }
+
+            const clearSelectionButton = document.getElementById('jobq-clear-selection');
+            if (clearSelectionButton) {
+                clearSelectionButton.disabled = count === 0;
+            }
+
+            const selectAll = document.getElementById('jobq-select-all');
+            const rowCheckboxes = Array.from(document.querySelectorAll('.jobq-select-row'));
+            if (!selectAll) {
+                return;
+            }
+            if (rowCheckboxes.length === 0) {
+                selectAll.checked = false;
+                selectAll.indeterminate = false;
+                return;
+            }
+            const selectedOnPage = rowCheckboxes.filter((cb) => cb.checked).length;
+            selectAll.checked = selectedOnPage === rowCheckboxes.length;
+            selectAll.indeterminate = selectedOnPage > 0 && selectedOnPage < rowCheckboxes.length;
+            jobqSyncBatchActionState();
+        }
+
+        function jobqToggleRowSelection(checkbox) {
+            if (!checkbox) {
+                return;
+            }
+            const id = checkbox.value;
+            if (!id) {
+                return;
+            }
+            if (checkbox.checked) {
+                jobqSelectedIds.add(id);
+            } else {
+                jobqSelectedIds.delete(id);
+            }
+            const row = checkbox.closest('tr');
+            if (row) {
+                row.classList.toggle('jobq-row-selected', checkbox.checked);
+            }
+            jobqSyncSelectionState();
+        }
+
+        function jobqToggleSelectAll(checkbox) {
+            const shouldSelect = !!(checkbox && checkbox.checked);
+            document.querySelectorAll('.jobq-select-row').forEach((rowCheckbox) => {
+                rowCheckbox.checked = shouldSelect;
+                const id = rowCheckbox.value;
+                if (!id) {
+                    return;
+                }
+                if (shouldSelect) {
+                    jobqSelectedIds.add(id);
+                } else {
+                    jobqSelectedIds.delete(id);
+                }
+            });
+            jobqSyncSelectionState();
+        }
+
+        function jobqClearSelection() {
+            jobqSelectedIds.clear();
+            document.querySelectorAll('.jobq-select-row').forEach((rowCheckbox) => {
+                rowCheckbox.checked = false;
+                const row = rowCheckbox.closest('tr');
+                if (row) {
+                    row.classList.remove('jobq-row-selected');
+                }
+            });
+            const selectAll = document.getElementById('jobq-select-all');
+            if (selectAll) {
+                selectAll.checked = false;
+                selectAll.indeterminate = false;
+            }
+            jobqSyncSelectionState();
+        }
+
+        function jobqReapplySelection() {
+            document.querySelectorAll('.jobq-select-row').forEach((rowCheckbox) => {
+                const selected = jobqSelectedIds.has(rowCheckbox.value);
+                rowCheckbox.checked = selected;
+                const row = rowCheckbox.closest('tr');
+                if (row) {
+                    row.classList.toggle('jobq-row-selected', selected);
+                }
+            });
+            jobqSyncSelectionState();
         }
 
         let jobqSearchDebounceHandle;
@@ -129,6 +280,23 @@
 
         document.addEventListener('htmx:beforeRequest', () => {
             jobqSyncFilters();
+        });
+
+        document.addEventListener('htmx:afterSwap', (event) => {
+            const detail = event && event.detail ? event.detail : null;
+            const target = detail ? detail.target : null;
+            if (target && target.id === 'jobs-container') {
+                jobqReapplySelection();
+            }
+        });
+
+        document.addEventListener('jobqSelectionCleared', () => {
+            jobqClearSelection();
+        });
+
+        document.addEventListener('DOMContentLoaded', () => {
+            jobqSyncSelectionState();
+            jobqSyncBatchActionState();
         });
     </script>
     <!-- Google Fonts -->
@@ -181,6 +349,11 @@
         .htmx-indicator-overlay.htmx-request {
             display: flex;
         }
+
+        .jobq-row-selected {
+            background: rgba(99, 102, 241, 0.14);
+            box-shadow: inset 0 0 0 1px rgba(129, 140, 248, 0.45);
+        }
     </style>
 </head>
 
@@ -223,6 +396,7 @@
         <input type="hidden" name="status" value="">
         <input type="hidden" name="page" value="0">
         <input type="hidden" name="query" value="">
+        <input type="hidden" name="selectedIds" value="">
 
         <!-- Stats Container (Auto-refreshes every 5s) -->
         <div id="stats-container" hx-get="/jobq/htmx/stats"
@@ -310,6 +484,63 @@
                     </button>
                 </div>
             </div>
+            <div class="mt-3 flex flex-wrap items-end gap-3 border-t border-slate-800/60 pt-3">
+                <div class="flex items-center gap-2 rounded-lg bg-slate-900/40 border border-slate-800 px-3 py-2">
+                    <span id="jobq-selected-count" class="text-sm text-slate-300 font-medium">0 selected</span>
+                    <span class="text-xs text-slate-500">across pages</span>
+                    <button id="jobq-clear-selection" type="button"
+                        class="px-2 py-1 rounded-md border border-slate-700 text-slate-300 text-xs hover:bg-slate-800 transition disabled:opacity-50"
+                        onclick="jobqClearSelection()" disabled>
+                        Clear selection
+                    </button>
+                </div>
+                <button id="jobq-rerun-selected" type="button"
+                    class="px-3 py-2 rounded-lg bg-indigo-600 border border-indigo-500/60 text-white text-sm hover:bg-indigo-500 transition disabled:opacity-50 disabled:cursor-not-allowed"
+                    hx-post="/jobq/htmx/jobs/rerun-selected"
+                    hx-target="#jobq-action-feedback"
+                    hx-swap="innerHTML"
+                    hx-indicator="#jobq-loading-indicator"
+                    hx-include="[name='selectedIds']"
+                    disabled>
+                    Rerun selected
+                </button>
+                <div class="flex flex-wrap items-end gap-2 lg:ml-auto">
+                    <div>
+                        <label for="jobq-failed-since" class="block text-[11px] uppercase tracking-wider text-slate-500 mb-1">Failed Since</label>
+                        <input id="jobq-failed-since" name="failedSince" type="datetime-local"
+                            class="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500/60"
+                            oninput="jobqSyncBatchActionState()">
+                    </div>
+                    <div class="flex items-center gap-1 pb-[2px]">
+                        <button type="button"
+                            class="px-2 py-1 rounded-md border border-slate-700 text-slate-300 text-xs hover:bg-slate-800 transition"
+                            onclick="jobqSetFailedSincePreset(1)">
+                            1h
+                        </button>
+                        <button type="button"
+                            class="px-2 py-1 rounded-md border border-slate-700 text-slate-300 text-xs hover:bg-slate-800 transition"
+                            onclick="jobqSetFailedSincePreset(24)">
+                            24h
+                        </button>
+                        <button type="button"
+                            class="px-2 py-1 rounded-md border border-slate-700 text-slate-300 text-xs hover:bg-slate-800 transition"
+                            onclick="jobqSetFailedSincePreset(168)">
+                            7d
+                        </button>
+                    </div>
+                    <button type="button"
+                        id="jobq-rerun-failed-since"
+                        class="px-3 py-2 rounded-lg bg-rose-600/90 border border-rose-500/60 text-white text-sm hover:bg-rose-500 transition disabled:opacity-50 disabled:cursor-not-allowed"
+                        hx-post="/jobq/htmx/jobs/rerun-failed-since"
+                        hx-target="#jobq-action-feedback"
+                        hx-swap="innerHTML"
+                        hx-indicator="#jobq-loading-indicator"
+                        hx-include="[name='failedSince'], [name='query'], [name='retriedOnly']"
+                        disabled>
+                        Rerun failed since
+                    </button>
+                </div>
+            </div>
         </div>
 
         <!-- Jobs List Section -->
@@ -345,6 +576,11 @@
                     <thead
                         class="bg-slate-900/80 backdrop-blur-md sticky top-0 border-b border-slate-800 text-slate-400 font-medium z-0 text-xs uppercase tracking-wider">
                         <tr>
+                            <th class="px-3 py-4 font-semibold">
+                                <input id="jobq-select-all" type="checkbox" class="rounded border-slate-600 bg-slate-900 text-indigo-500"
+                                    aria-label="Select all jobs on this page"
+                                    onchange="jobqToggleSelectAll(this)">
+                            </th>
                             <th class="px-6 py-4 font-semibold">Status</th>
                             <th class="px-6 py-4 font-semibold">Type</th>
                             <th class="px-6 py-4 text-center font-semibold">Reliability</th>
@@ -369,6 +605,8 @@
 
     <!-- Slide-over Modal Target -->
     <div id="modal-container"></div>
+    <div id="jobq-action-feedback" aria-live="polite"
+        class="fixed top-20 right-6 z-[55] w-[min(30rem,calc(100%-1.5rem))] pointer-events-none"></div>
 
     <!-- Decorative ambient glow -->
     <div

@@ -18,6 +18,7 @@ import com.jobq.JobRepository;
 import com.jobq.TestApplication;
 import java.nio.charset.StandardCharsets;
 import java.time.OffsetDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
@@ -119,7 +120,14 @@ class JobQDashboardIntegrationTest {
                 .andExpect(content().string(org.hamcrest.Matchers.containsString("name=\"statusFilter\"")))
                 .andExpect(content().string(org.hamcrest.Matchers.containsString("name=\"scheduledOnly\"")))
                 .andExpect(content().string(org.hamcrest.Matchers.containsString("name=\"retriedOnly\"")))
-                .andExpect(content().string(org.hamcrest.Matchers.containsString("run-at-asc")));
+                .andExpect(content().string(org.hamcrest.Matchers.containsString("run-at-asc")))
+                .andExpect(content().string(org.hamcrest.Matchers.containsString("name=\"selectedIds\"")))
+                .andExpect(content().string(org.hamcrest.Matchers.containsString("name=\"failedSince\"")))
+                .andExpect(content().string(org.hamcrest.Matchers.containsString("Rerun selected")))
+                .andExpect(content().string(org.hamcrest.Matchers.containsString("Rerun failed since")))
+                .andExpect(content().string(org.hamcrest.Matchers.containsString("jobq-action-feedback")))
+                .andExpect(content().string(org.hamcrest.Matchers.containsString("jobq-select-all")))
+                .andExpect(content().string(org.hamcrest.Matchers.containsString("across pages")));
     }
 
     @Test
@@ -350,6 +358,69 @@ class JobQDashboardIntegrationTest {
 
         Job reloaded = jobRepository.findById(pending.getId()).orElseThrow();
         assertEquals("PENDING", reloaded.getStatus());
+    }
+
+    @Test
+    void shouldBatchRerunSelectedTerminalJobs() throws Exception {
+        Job failed = persistFailed("failed-batch-rerun", "boom", 2);
+        Job completed = persistCompleted("completed-batch-rerun");
+        Job pending = persistPending("pending-batch-rerun", OffsetDateTime.now().plusMinutes(1), 0, null, null);
+
+        mockMvc.perform(post("/jobq/htmx/jobs/rerun-selected")
+                        .header("Authorization", basicAuthHeader())
+                        .param("selectedIds", failed.getId() + "," + completed.getId() + "," + pending.getId()))
+                .andExpect(status().isOk())
+                .andExpect(header().string("HX-Trigger", org.hamcrest.Matchers.containsString("jobqSelectionCleared")))
+                .andExpect(content().string(org.hamcrest.Matchers.containsString("Queued 2 selected jobs")));
+
+        Job failedReloaded = jobRepository.findById(failed.getId()).orElseThrow();
+        assertEquals("PENDING", failedReloaded.getStatus());
+        assertEquals(0, failedReloaded.getRetryCount());
+        assertNull(failedReloaded.getErrorMessage());
+
+        Job completedReloaded = jobRepository.findById(completed.getId()).orElseThrow();
+        assertEquals("PENDING", completedReloaded.getStatus());
+        assertEquals(0, completedReloaded.getRetryCount());
+        assertNull(completedReloaded.getErrorMessage());
+
+        Job pendingReloaded = jobRepository.findById(pending.getId()).orElseThrow();
+        assertEquals("PENDING", pendingReloaded.getStatus());
+    }
+
+    @Test
+    void shouldBatchRerunFailedJobsByFilterSinceTimestamp() throws Exception {
+        Job oldFailed = persistFailed("invoice-old-failed", "legacy timeout", 1);
+        oldFailed.setFailedAt(OffsetDateTime.now().minusHours(2));
+        oldFailed.setUpdatedAt(OffsetDateTime.now().minusHours(2));
+        jobRepository.saveAndFlush(oldFailed);
+
+        Job recentFailedMatching = persistFailed("invoice-recent-failed", "invoice API timeout", 3);
+        Job recentFailedNonMatching = persistFailed("shipping-recent-failed", "carrier timeout", 1);
+
+        OffsetDateTime since = OffsetDateTime.now().minusMinutes(30);
+        String sinceParam = since.toLocalDateTime().format(DateTimeFormatter.ISO_LOCAL_DATE_TIME);
+
+        mockMvc.perform(post("/jobq/htmx/jobs/rerun-failed-since")
+                        .header("Authorization", basicAuthHeader())
+                        .param("failedSince", sinceParam)
+                        .param("query", "invoice")
+                        .param("retriedOnly", "true"))
+                .andExpect(status().isOk())
+                .andExpect(header().string("HX-Trigger", "jobq-refresh"))
+                .andExpect(content().string(org.hamcrest.Matchers.containsString("Queued 1 failed job since")));
+
+        Job oldFailedReloaded = jobRepository.findById(oldFailed.getId()).orElseThrow();
+        assertEquals("FAILED", oldFailedReloaded.getStatus());
+
+        Job recentFailedMatchingReloaded =
+                jobRepository.findById(recentFailedMatching.getId()).orElseThrow();
+        assertEquals("PENDING", recentFailedMatchingReloaded.getStatus());
+        assertEquals(0, recentFailedMatchingReloaded.getRetryCount());
+        assertNull(recentFailedMatchingReloaded.getErrorMessage());
+
+        Job recentFailedNonMatchingReloaded =
+                jobRepository.findById(recentFailedNonMatching.getId()).orElseThrow();
+        assertEquals("FAILED", recentFailedNonMatchingReloaded.getStatus());
     }
 
     private String basicAuthHeader() {

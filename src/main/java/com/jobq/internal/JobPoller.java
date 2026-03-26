@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.ObjectReader;
 import com.jobq.Job;
+import com.jobq.JobLifecycle;
 import com.jobq.JobRepository;
 import com.jobq.JobWorker;
 import jakarta.annotation.PostConstruct;
@@ -27,6 +28,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ListableBeanFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.core.ResolvableType;
 import org.springframework.core.annotation.AnnotationUtils;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.PageRequest;
@@ -320,6 +322,28 @@ public class JobPoller {
         Class<?> beanClass = ClassUtils.getUserClass(bean);
         String jobType = resolveConfiguredTypeOrClassName(annotation.value(), beanClass);
 
+        if (bean instanceof JobLifecycle<?> lifecycle) {
+            Class<?> payloadClass = resolveLifecyclePayloadClass(bean, annotation);
+            PayloadDeserializer payloadDeserializer = payloadDeserializerFor(payloadClass);
+            JobInvoker invoker = (jobId, payload) -> invokeLifecycleProcess(lifecycle, jobId, payload);
+            JobErrorHandler errorHandler =
+                    (jobId, payload, exception) -> invokeLifecycleOnError(lifecycle, jobId, payload, exception);
+            JobSuccessHandler successHandler = (jobId, payload) -> invokeLifecycleOnSuccess(lifecycle, jobId, payload);
+            JobAfterHandler afterHandler = (jobId, payload) -> invokeLifecycleAfter(lifecycle, jobId, payload);
+
+            registerJob(
+                    registrations,
+                    jobType,
+                    payloadDeserializer,
+                    annotation,
+                    invoker,
+                    errorHandler,
+                    successHandler,
+                    afterHandler,
+                    "@Job bean " + ClassUtils.getUserClass(bean).getName());
+            return;
+        }
+
         Method processMethod = resolveProcessMethod(bean, annotation);
         Class<?> payloadClass = resolvePayloadClass(annotation, processMethod);
         PayloadDeserializer payloadDeserializer = payloadDeserializerFor(payloadClass);
@@ -341,6 +365,24 @@ public class JobPoller {
                 successHandler,
                 afterHandler,
                 "@Job bean " + ClassUtils.getUserClass(bean).getName());
+    }
+
+    private Class<?> resolveLifecyclePayloadClass(Object bean, com.jobq.annotation.Job annotation) {
+        if (annotation.payload() != Void.class) {
+            return annotation.payload();
+        }
+
+        Class<?> targetClass = ClassUtils.getUserClass(bean);
+        Class<?> resolvedFromGeneric = ResolvableType.forClass(targetClass)
+                .as(JobLifecycle.class)
+                .getGeneric(0)
+                .resolve();
+        if (resolvedFromGeneric != null) {
+            return resolvedFromGeneric;
+        }
+
+        Method processMethod = resolveProcessMethod(bean, annotation);
+        return resolvePayloadClass(annotation, processMethod);
     }
 
     private String resolveConfiguredTypeOrClassName(String configuredType, Class<?> ownerClass) {
@@ -802,6 +844,30 @@ public class JobPoller {
         @SuppressWarnings("unchecked")
         JobWorker<Object> castWorker = (JobWorker<Object>) worker;
         castWorker.after(jobId, payload);
+    }
+
+    private void invokeLifecycleProcess(JobLifecycle<?> lifecycle, UUID jobId, Object payload) throws Exception {
+        @SuppressWarnings("unchecked")
+        JobLifecycle<Object> castLifecycle = (JobLifecycle<Object>) lifecycle;
+        castLifecycle.process(jobId, payload);
+    }
+
+    private void invokeLifecycleOnError(JobLifecycle<?> lifecycle, UUID jobId, Object payload, Exception exception) {
+        @SuppressWarnings("unchecked")
+        JobLifecycle<Object> castLifecycle = (JobLifecycle<Object>) lifecycle;
+        castLifecycle.onError(jobId, payload, exception);
+    }
+
+    private void invokeLifecycleOnSuccess(JobLifecycle<?> lifecycle, UUID jobId, Object payload) {
+        @SuppressWarnings("unchecked")
+        JobLifecycle<Object> castLifecycle = (JobLifecycle<Object>) lifecycle;
+        castLifecycle.onSuccess(jobId, payload);
+    }
+
+    private void invokeLifecycleAfter(JobLifecycle<?> lifecycle, UUID jobId, Object payload) {
+        @SuppressWarnings("unchecked")
+        JobLifecycle<Object> castLifecycle = (JobLifecycle<Object>) lifecycle;
+        castLifecycle.after(jobId, payload);
     }
 
     private com.jobq.annotation.Job findJobAnnotationOnBean(Object bean) {

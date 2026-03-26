@@ -143,6 +143,7 @@ class JobQHtmxControllerTest {
         mockMvc.perform(get("/jobq/htmx/jobs").param("status", "FAILED"))
                 .andExpect(status().isOk())
                 .andExpect(content().string(containsString("Retry")))
+                .andExpect(content().string(containsString("hx-target=\"#jobq-action-feedback\"")))
                 .andExpect(content().string(containsString("Failed at")))
                 .andExpect(content().string(containsString("Database timeout while writing status row")));
     }
@@ -533,6 +534,69 @@ class JobQHtmxControllerTest {
                 .andExpect(content().string(containsString("cannot be rerun")));
 
         verify(jobRepository, never()).save(any(Job.class));
+    }
+
+    @Test
+    void shouldBatchRerunSelectedTerminalJobs() throws Exception {
+        UUID first = UUID.randomUUID();
+        UUID second = UUID.randomUUID();
+        when(jobRepository.rerunTerminalJobsByIds(any(), any())).thenReturn(2);
+
+        mockMvc.perform(post("/jobq/htmx/jobs/rerun-selected")
+                        .param("selectedIds", first + "," + second + ",not-a-uuid"))
+                .andExpect(status().isOk())
+                .andExpect(header().string("HX-Trigger", containsString("jobqSelectionCleared")))
+                .andExpect(content().string(containsString("Queued 2 selected jobs")));
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<UUID>> idsCaptor = ArgumentCaptor.forClass(List.class);
+        verify(jobRepository).rerunTerminalJobsByIds(idsCaptor.capture(), any(OffsetDateTime.class));
+        assertEquals(List.of(first, second), idsCaptor.getValue());
+    }
+
+    @Test
+    void shouldRejectBatchRerunWhenSelectionIsEmpty() throws Exception {
+        mockMvc.perform(post("/jobq/htmx/jobs/rerun-selected"))
+                .andExpect(status().isOk())
+                .andExpect(content().string(containsString("Select at least one COMPLETED or FAILED job")));
+
+        verify(jobRepository, never()).rerunTerminalJobsByIds(any(), any(OffsetDateTime.class));
+    }
+
+    @Test
+    void shouldRerunFailedJobsByFilterSince() throws Exception {
+        when(jobRepository.rerunFailedJobsByFilterSince(
+                        anyString(), anyBoolean(), anyBoolean(), any(UUID.class), any(OffsetDateTime.class), any()))
+                .thenReturn(3);
+
+        mockMvc.perform(post("/jobq/htmx/jobs/rerun-failed-since")
+                        .param("failedSince", "2026-03-26T12:00:00")
+                        .param("query", "invoice")
+                        .param("retriedOnly", "true"))
+                .andExpect(status().isOk())
+                .andExpect(header().string("HX-Trigger", "jobq-refresh"))
+                .andExpect(content().string(containsString("Queued 3 failed jobs since")));
+
+        verify(jobRepository)
+                .rerunFailedJobsByFilterSince(
+                        eq("invoice"),
+                        eq(true),
+                        eq(false),
+                        eq(new UUID(0L, 0L)),
+                        any(OffsetDateTime.class),
+                        any(OffsetDateTime.class));
+    }
+
+    @Test
+    void shouldRejectBatchFailedRerunWhenTimestampIsInvalid() throws Exception {
+        mockMvc.perform(post("/jobq/htmx/jobs/rerun-failed-since").param("failedSince", "not-a-date"))
+                .andExpect(status().isOk())
+                .andExpect(
+                        content().string(containsString("Provide a valid timestamp for the failed-since batch rerun")));
+
+        verify(jobRepository, never())
+                .rerunFailedJobsByFilterSince(
+                        anyString(), anyBoolean(), anyBoolean(), any(UUID.class), any(OffsetDateTime.class), any());
     }
 
     private JobRepository.DashboardJobView dashboardRow(

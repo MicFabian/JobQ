@@ -102,6 +102,17 @@ public class JobQIntegrationTest {
     static volatile CountDownLatch annotationAfterAlwaysLatch;
     static volatile UUID lastAnnotationAfterAlwaysJobId;
     static volatile String lastAnnotationAfterAlwaysMessage;
+    static volatile CountDownLatch lifecycleSuccessCallbacksLatch;
+    static volatile UUID lastLifecycleSuccessJobId;
+    static volatile String lastLifecycleSuccessMessage;
+    static volatile UUID lastLifecycleSuccessAfterJobId;
+    static volatile String lastLifecycleSuccessAfterMessage;
+    static volatile CountDownLatch lifecycleErrorCallbacksLatch;
+    static volatile UUID lastLifecycleErrorJobId;
+    static volatile String lastLifecycleErrorMessage;
+    static volatile String lastLifecycleErrorExceptionType;
+    static volatile UUID lastLifecycleErrorAfterJobId;
+    static volatile String lastLifecycleErrorAfterMessage;
 
     @Configuration
     static class TestConfig {
@@ -418,6 +429,69 @@ public class JobQIntegrationTest {
         @Bean
         AnnotationAfterAlwaysJob annotationAfterAlwaysJob() {
             return new AnnotationAfterAlwaysJob();
+        }
+
+        @com.jobq.annotation.Job(value = "LIFECYCLE_SUCCESS_JOB")
+        static class LifecycleSuccessJob implements JobLifecycle<TestPayload> {
+            @Override
+            public void process(UUID jobId, TestPayload payload) {
+                // no-op
+            }
+
+            @Override
+            public void onSuccess(UUID jobId, TestPayload payload) {
+                lastLifecycleSuccessJobId = jobId;
+                lastLifecycleSuccessMessage = payload != null ? payload.getMessage() : null;
+                if (lifecycleSuccessCallbacksLatch != null) {
+                    lifecycleSuccessCallbacksLatch.countDown();
+                }
+            }
+
+            @Override
+            public void after(UUID jobId, TestPayload payload) {
+                lastLifecycleSuccessAfterJobId = jobId;
+                lastLifecycleSuccessAfterMessage = payload != null ? payload.getMessage() : null;
+                if (lifecycleSuccessCallbacksLatch != null) {
+                    lifecycleSuccessCallbacksLatch.countDown();
+                }
+            }
+        }
+
+        @Bean
+        LifecycleSuccessJob lifecycleSuccessJob() {
+            return new LifecycleSuccessJob();
+        }
+
+        @com.jobq.annotation.Job(value = "LIFECYCLE_ERROR_JOB")
+        static class LifecycleErrorJob implements JobLifecycle<TestPayload> {
+            @Override
+            public void process(UUID jobId, TestPayload payload) {
+                throw new RuntimeException("Lifecycle failure");
+            }
+
+            @Override
+            public void onError(UUID jobId, TestPayload payload, Exception exception) {
+                lastLifecycleErrorJobId = jobId;
+                lastLifecycleErrorMessage = payload != null ? payload.getMessage() : null;
+                lastLifecycleErrorExceptionType = exception.getClass().getName();
+                if (lifecycleErrorCallbacksLatch != null) {
+                    lifecycleErrorCallbacksLatch.countDown();
+                }
+            }
+
+            @Override
+            public void after(UUID jobId, TestPayload payload) {
+                lastLifecycleErrorAfterJobId = jobId;
+                lastLifecycleErrorAfterMessage = payload != null ? payload.getMessage() : null;
+                if (lifecycleErrorCallbacksLatch != null) {
+                    lifecycleErrorCallbacksLatch.countDown();
+                }
+            }
+        }
+
+        @Bean
+        LifecycleErrorJob lifecycleErrorJob() {
+            return new LifecycleErrorJob();
         }
 
         @com.jobq.annotation.Job(
@@ -1097,6 +1171,52 @@ public class JobQIntegrationTest {
             assertEquals("annotation-after-always", lastAnnotationAfterAlwaysMessage);
             assertEquals("FAILED", job.getStatus());
             assertEquals(1, job.getRetryCount());
+        });
+    }
+
+    @Test
+    void shouldInvokeJobLifecycleInterfaceCallbacksOnSuccess() throws InterruptedException {
+        lifecycleSuccessCallbacksLatch = new CountDownLatch(2);
+        lastLifecycleSuccessJobId = null;
+        lastLifecycleSuccessMessage = null;
+        lastLifecycleSuccessAfterJobId = null;
+        lastLifecycleSuccessAfterMessage = null;
+
+        UUID jobId = jobClient.enqueue("LIFECYCLE_SUCCESS_JOB", new TestPayload("lifecycle-success"));
+        assertTrue(lifecycleSuccessCallbacksLatch.await(10, TimeUnit.SECONDS));
+
+        await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
+            Job job = jobRepository.findById(jobId).orElseThrow();
+            assertEquals("COMPLETED", job.getStatus());
+            assertEquals(0, job.getRetryCount());
+            assertEquals(jobId, lastLifecycleSuccessJobId);
+            assertEquals("lifecycle-success", lastLifecycleSuccessMessage);
+            assertEquals(jobId, lastLifecycleSuccessAfterJobId);
+            assertEquals("lifecycle-success", lastLifecycleSuccessAfterMessage);
+        });
+    }
+
+    @Test
+    void shouldInvokeJobLifecycleInterfaceCallbacksOnFailure() throws InterruptedException {
+        lifecycleErrorCallbacksLatch = new CountDownLatch(2);
+        lastLifecycleErrorJobId = null;
+        lastLifecycleErrorMessage = null;
+        lastLifecycleErrorExceptionType = null;
+        lastLifecycleErrorAfterJobId = null;
+        lastLifecycleErrorAfterMessage = null;
+
+        UUID jobId = jobClient.enqueue("LIFECYCLE_ERROR_JOB", new TestPayload("lifecycle-error"), 0);
+        assertTrue(lifecycleErrorCallbacksLatch.await(10, TimeUnit.SECONDS));
+
+        await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
+            Job job = jobRepository.findById(jobId).orElseThrow();
+            assertEquals("FAILED", job.getStatus());
+            assertEquals(1, job.getRetryCount());
+            assertEquals(jobId, lastLifecycleErrorJobId);
+            assertEquals("lifecycle-error", lastLifecycleErrorMessage);
+            assertEquals(RuntimeException.class.getName(), lastLifecycleErrorExceptionType);
+            assertEquals(jobId, lastLifecycleErrorAfterJobId);
+            assertEquals("lifecycle-error", lastLifecycleErrorAfterMessage);
         });
     }
 

@@ -424,5 +424,58 @@ public interface JobRepository extends JpaRepository<Job, UUID> {
     int releaseGroupedPendingJobs(
             @Param("type") String type, @Param("groupIds") List<String> groupIds, @Param("now") OffsetDateTime now);
 
+    @Modifying
+    @Transactional
+    @Query(
+            """
+            UPDATE Job j
+            SET j.processingStartedAt = NULL,
+                j.finishedAt = NULL,
+                j.failedAt = NULL,
+                j.retryCount = 0,
+                j.errorMessage = NULL,
+                j.lockedAt = NULL,
+                j.lockedBy = NULL,
+                j.runAt = :now,
+                j.updatedAt = :now
+            WHERE j.id IN :ids
+              AND (j.finishedAt IS NOT NULL OR j.failedAt IS NOT NULL)
+            """)
+    int rerunTerminalJobsByIds(@Param("ids") List<UUID> ids, @Param("now") OffsetDateTime now);
+
+    @Modifying
+    @Transactional
+    @Query(
+            """
+            UPDATE Job j
+            SET j.processingStartedAt = NULL,
+                j.finishedAt = NULL,
+                j.failedAt = NULL,
+                j.retryCount = 0,
+                j.errorMessage = NULL,
+                j.lockedAt = NULL,
+                j.lockedBy = NULL,
+                j.runAt = :now,
+                j.updatedAt = :now
+            WHERE j.failedAt IS NOT NULL
+              AND j.failedAt >= :failedSince
+              AND (:retriedOnly = false OR j.retryCount > 0)
+              AND (
+                :query = ''
+                OR LOWER(j.type) LIKE LOWER(CONCAT('%', :query, '%'))
+                OR LOWER(COALESCE(j.groupId, '')) LIKE LOWER(CONCAT('%', :query, '%'))
+                OR LOWER(COALESCE(j.replaceKey, '')) LIKE LOWER(CONCAT('%', :query, '%'))
+                OR LOWER(COALESCE(j.errorMessage, '')) LIKE LOWER(CONCAT('%', :query, '%'))
+                OR (:jobIdProvided = true AND j.id = :jobId)
+              )
+            """)
+    int rerunFailedJobsByFilterSince(
+            @Param("query") String query,
+            @Param("retriedOnly") boolean retriedOnly,
+            @Param("jobIdProvided") boolean jobIdProvided,
+            @Param("jobId") UUID jobId,
+            @Param("failedSince") OffsetDateTime failedSince,
+            @Param("now") OffsetDateTime now);
+
     boolean existsByTypeAndCronAndFinishedAtIsNullAndFailedAtIsNull(String type, String cron);
 }

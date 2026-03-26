@@ -155,6 +155,48 @@ Supported annotation-driven `onSuccess(...)` and `after(...)` signatures:
 - `onSuccess(Payload payload)` / `after(Payload payload)`
 - `onSuccess(UUID jobId, Payload payload)` / `after(UUID jobId, Payload payload)`
 
+### Annotation + `JobLifecycle<T>` (Optional Structured Contract)
+
+Use this when you want compile-time lifecycle structure while still registering via `@Job`.
+
+```java
+import com.jobq.JobLifecycle;
+import com.jobq.annotation.Job;
+import org.springframework.stereotype.Component;
+
+import java.util.UUID;
+
+@Component
+@Job // value omitted => type = class name, payload inferred from JobLifecycle<WelcomeEmailPayload>
+public class WelcomeEmailJob implements JobLifecycle<WelcomeEmailPayload> {
+
+    @Override
+    public void process(UUID jobId, WelcomeEmailPayload payload) throws Exception {
+        // business logic
+    }
+
+    @Override
+    public void onError(UUID jobId, WelcomeEmailPayload payload, Exception exception) {
+        // optional
+    }
+
+    @Override
+    public void onSuccess(UUID jobId, WelcomeEmailPayload payload) {
+        // optional
+    }
+
+    @Override
+    public void after(UUID jobId, WelcomeEmailPayload payload) {
+        // optional, runs for both success/failure
+    }
+}
+```
+
+Notes:
+
+- `@Job(payload = ...)` remains supported and overrides payload inference when provided.
+- If `@Job.value` is omitted, job type defaults to the fully-qualified class name.
+
 ### `JobWorker<T>` Interface
 
 ```java
