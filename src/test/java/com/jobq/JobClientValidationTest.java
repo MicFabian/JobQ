@@ -2,9 +2,11 @@ package com.jobq;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -15,12 +17,17 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.jobq.config.JobQProperties;
 import com.jobq.internal.JobTypeMetadataRegistry;
 import java.time.Duration;
+import java.time.Instant;
 import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
+import java.util.Collection;
+import java.util.List;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.core.ParameterizedPreparedStatementSetter;
 import org.springframework.jdbc.core.PreparedStatementSetter;
 
 class JobClientValidationTest {
@@ -158,6 +165,20 @@ class JobClientValidationTest {
     }
 
     @Test
+    void shouldResolveTypeFromJobClassWhenEnqueueingAtByClassAndInstant() {
+        Instant requestedRunAt = Instant.now().plusSeconds(90);
+
+        jobClient.enqueueAt(ClassBasedJob.class, "payload", requestedRunAt);
+
+        ArgumentCaptor<Job> jobCaptor = ArgumentCaptor.forClass(Job.class);
+        verify(jobRepository).save(jobCaptor.capture());
+        Job saved = jobCaptor.getValue();
+
+        assertEquals("CLASS_BASED_JOB", saved.getType());
+        assertEquals(OffsetDateTime.ofInstant(requestedRunAt, ZoneOffset.UTC), saved.getRunAt());
+    }
+
+    @Test
     void shouldFallbackToClassNameWhenJobAnnotationValueIsOmitted() {
         jobClient.enqueue(ClassNameFallbackJob.class, "payload");
 
@@ -166,6 +187,12 @@ class JobClientValidationTest {
         Job saved = jobCaptor.getValue();
 
         assertEquals(ClassNameFallbackJob.class.getName(), saved.getType());
+    }
+
+    @Test
+    void shouldExposeDefaultValueForJobAnnotationType() throws NoSuchMethodException {
+        Object defaultValue = com.jobq.annotation.Job.class.getMethod("value").getDefaultValue();
+        assertEquals("", defaultValue);
     }
 
     @Test
@@ -185,6 +212,35 @@ class JobClientValidationTest {
     void shouldRejectNullRunAtForEnqueueAt() {
         assertThrows(
                 IllegalArgumentException.class, () -> jobClient.enqueueAt("TYPE", "payload", (OffsetDateTime) null));
+    }
+
+    @Test
+    void shouldBatchEnqueueUsingResolvedClassType() {
+        when(jdbcTemplate.batchUpdate(
+                        anyString(),
+                        org.mockito.ArgumentMatchers.<Collection<Object>>any(),
+                        anyInt(),
+                        org.mockito.ArgumentMatchers.<ParameterizedPreparedStatementSetter<Object>>any()))
+                .thenReturn(new int[][] {{1, 1, 1}});
+
+        jobClient.enqueueAllAt(
+                ClassBasedJob.class, List.of("a", "b", "c"), Instant.now().plusSeconds(60));
+
+        verify(jdbcTemplate)
+                .batchUpdate(
+                        anyString(),
+                        org.mockito.ArgumentMatchers.<Collection<Object>>any(),
+                        eq(3),
+                        org.mockito.ArgumentMatchers.<ParameterizedPreparedStatementSetter<Object>>any());
+    }
+
+    @Test
+    void shouldReturnEmptyListForEmptyBatchEnqueue() {
+        List<UUID> ids = jobClient.enqueueAll("TYPE", List.of());
+
+        assertTrue(ids.isEmpty());
+        verify(jdbcTemplate, never())
+                .batchUpdate(anyString(), org.mockito.ArgumentMatchers.<Collection<Object>>any(), anyInt(), any());
     }
 
     @Test

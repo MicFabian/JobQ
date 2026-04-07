@@ -68,7 +68,7 @@ class RecurringJobInitializerTest {
 
     @Test
     void shouldBootstrapRecurringJobWhenNoActiveExecutionExists() {
-        when(jobRepository.existsByTypeAndCronAndFinishedAtIsNullAndFailedAtIsNull(
+        when(jobRepository.existsByTypeAndCronAndFinishedAtIsNullAndFailedAtIsNullAndCancelledAtIsNull(
                         "RECURRING_BOOTSTRAP_JOB", "*/5 * * * * *"))
                 .thenReturn(false);
 
@@ -91,7 +91,7 @@ class RecurringJobInitializerTest {
 
     @Test
     void shouldSkipBootstrappingWhenActiveRecurringExecutionAlreadyExists() {
-        when(jobRepository.existsByTypeAndCronAndFinishedAtIsNullAndFailedAtIsNull(
+        when(jobRepository.existsByTypeAndCronAndFinishedAtIsNullAndFailedAtIsNullAndCancelledAtIsNull(
                         "RECURRING_BOOTSTRAP_JOB", "*/5 * * * * *"))
                 .thenReturn(true);
 
@@ -104,7 +104,8 @@ class RecurringJobInitializerTest {
 
     @Test
     void shouldIgnoreInvalidCronExpressionsWithoutCrashingStartup() {
-        when(jobRepository.existsByTypeAndCronAndFinishedAtIsNullAndFailedAtIsNull("INVALID_CRON_JOB", "not-a-cron"))
+        when(jobRepository.existsByTypeAndCronAndFinishedAtIsNullAndFailedAtIsNullAndCancelledAtIsNull(
+                        "INVALID_CRON_JOB", "not-a-cron"))
                 .thenReturn(false);
 
         RecurringJobInitializer initializer =
@@ -116,7 +117,7 @@ class RecurringJobInitializerTest {
 
     @Test
     void shouldDetectRecurringAnnotationOnProxiedWorker() {
-        when(jobRepository.existsByTypeAndCronAndFinishedAtIsNullAndFailedAtIsNull(
+        when(jobRepository.existsByTypeAndCronAndFinishedAtIsNullAndFailedAtIsNullAndCancelledAtIsNull(
                         "RECURRING_BOOTSTRAP_JOB", "*/5 * * * * *"))
                 .thenReturn(false);
 
@@ -136,7 +137,7 @@ class RecurringJobInitializerTest {
     void shouldBootstrapRecurringJobFromAnnotationOnlyBean() {
         when(beanFactory.getBeansWithAnnotation(com.jobq.annotation.Job.class))
                 .thenReturn(Map.of("annotationOnlyRecurringJob", new AnnotationOnlyRecurringJob()));
-        when(jobRepository.existsByTypeAndCronAndFinishedAtIsNullAndFailedAtIsNull(
+        when(jobRepository.existsByTypeAndCronAndFinishedAtIsNullAndFailedAtIsNullAndCancelledAtIsNull(
                         "ANNOTATION_ONLY_RECURRING_JOB", "*/5 * * * * *"))
                 .thenReturn(false);
 
@@ -153,7 +154,7 @@ class RecurringJobInitializerTest {
     void shouldFallbackRecurringTypeToClassNameWhenAnnotationValueOmitted() {
         when(beanFactory.getBeansWithAnnotation(com.jobq.annotation.Job.class))
                 .thenReturn(Map.of("classNameRecurringJob", new ClassNameRecurringJob()));
-        when(jobRepository.existsByTypeAndCronAndFinishedAtIsNullAndFailedAtIsNull(
+        when(jobRepository.existsByTypeAndCronAndFinishedAtIsNullAndFailedAtIsNullAndCancelledAtIsNull(
                         ClassNameRecurringJob.class.getName(), "*/5 * * * * *"))
                 .thenReturn(false);
 

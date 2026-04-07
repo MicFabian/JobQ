@@ -32,6 +32,18 @@ public @interface Job {
     String cron() default "";
 
     /**
+     * Defines how recurring jobs behave when executions were missed while the
+     * application was down or the job cadence drifted behind wall clock time.
+     */
+    CronMisfirePolicy cronMisfirePolicy() default CronMisfirePolicy.SKIP;
+
+    /**
+     * Maximum number of overdue recurring executions JobQ should backfill on
+     * startup for {@link #cronMisfirePolicy()} values that support catch-up.
+     */
+    int maxCatchUpExecutions() default 24;
+
+    /**
      * Initial delay in milliseconds applied when a job is enqueued without an
      * explicit run instant.
      */
@@ -62,6 +74,13 @@ public @interface Job {
      * The initial delay in milliseconds before the first retry.
      */
     long initialBackoffMs() default 1000;
+
+    /**
+     * Maximum allowed execution time in milliseconds for a claimed job attempt.
+     * When exceeded, the attempt is fenced off and retried or failed terminally.
+     * A value of {@code 0} disables execution timeout handling.
+     */
+    long maxExecutionMs() default 0;
 
     /**
      * Strategies for how retries affect queue priority.
@@ -119,5 +138,24 @@ public @interface Job {
          * immediately.
          */
         KEEP_EXISTING_DELAY_RUN_ALL_ON_FIRST_DUE
+    }
+
+    enum CronMisfirePolicy {
+        /**
+         * Schedule the next future occurrence and skip missed executions.
+         */
+        SKIP,
+
+        /**
+         * If one or more executions were missed, enqueue one immediate recovery run
+         * and continue from the current wall clock time afterward.
+         */
+        FIRE_ONCE,
+
+        /**
+         * Continue scheduling from the last expected run time so overdue executions
+         * are caught up sequentially.
+         */
+        CATCH_UP
     }
 }

@@ -7,6 +7,7 @@ out/
 
 # Gradle
 .gradle/
+.gradle-local/
 build/
 
 # Maven
@@ -24,3 +25,7 @@ buildNumber.properties
 # OS
 .DS_Store
 Thumbs.db
+
+# Local smoke-test and browser artifacts
+output/
+scripts/node_modules/

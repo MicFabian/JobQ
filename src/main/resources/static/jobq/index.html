@@ -34,6 +34,19 @@
             }
         }
 
+        const jobqSettings = { readOnly: false };
+        let jobqEventSource;
+        let jobqRefreshQueued = false;
+        const jobqLoadedOpsTabs = new Set();
+        const jobqOpsTabs = ['metrics', 'queues', 'recurring', 'nodes', 'audit'];
+        const jobqOpsContentIds = {
+            queues: 'jobq-queues-panel',
+            metrics: 'jobq-metrics-panel',
+            recurring: 'jobq-recurring-panel',
+            nodes: 'jobq-nodes-panel',
+            audit: 'jobq-audit-panel'
+        };
+
         function jobqSetPage(page) {
             const pageInput = document.querySelector('input[name=page]');
             if (pageInput) {
@@ -78,6 +91,32 @@
             htmx.trigger(document.body, 'jobq-refresh');
         }
 
+        function jobqActiveOpsTab() {
+            return document.body.dataset.jobqOpsTab || 'queues';
+        }
+
+        function jobqLoadOpsTab(tabName, forceRefresh) {
+            const activeTab = jobqOpsTabs.includes(tabName) ? tabName : 'queues';
+            const panelId = jobqOpsContentIds[activeTab];
+            const panel = panelId ? document.getElementById(panelId) : null;
+            if (!panel) {
+                return;
+            }
+            if (!forceRefresh && jobqLoadedOpsTabs.has(activeTab)) {
+                return;
+            }
+            jobqLoadedOpsTabs.add(activeTab);
+            htmx.trigger(panel, 'jobq-load');
+        }
+
+        function jobqRefreshOperations() {
+            jobqLoadOpsTab(jobqActiveOpsTab(), true);
+        }
+
+        function jobqRefreshQueues() {
+            htmx.trigger(document.body, 'jobq-queue-refresh');
+        }
+
         function jobqClearFilters() {
             const search = document.querySelector('input[name=queryInput]');
             const statusFilter = document.querySelector('select[name=statusFilter]');
@@ -98,6 +137,27 @@
             if (failedSince) failedSince.value = '';
             jobqClearSelection();
             jobqRefresh(true);
+        }
+
+        function jobqToggleQueueScope() {
+            const scopeInput = document.querySelector('input[name=queueScope]');
+            if (!scopeInput) {
+                return;
+            }
+            scopeInput.value = scopeInput.value === 'all' ? 'interesting' : 'all';
+            jobqRefreshQueues();
+        }
+
+        function jobqScheduleRefresh() {
+            if (jobqRefreshQueued) {
+                return;
+            }
+            jobqRefreshQueued = true;
+            setTimeout(() => {
+                jobqRefresh(false);
+                jobqRefreshOperations();
+                jobqRefreshQueued = false;
+            }, 150);
         }
 
         const jobqSelectedIds = new Set();
@@ -254,6 +314,141 @@
             jobqSearchDebounceHandle = setTimeout(() => jobqRefresh(true), 300);
         }
 
+        function jobqSavedViews() {
+            try {
+                return JSON.parse(localStorage.getItem('jobq:saved-views') || '[]');
+            } catch (_error) {
+                return [];
+            }
+        }
+
+        function jobqWriteSavedViews(views) {
+            localStorage.setItem('jobq:saved-views', JSON.stringify(views));
+        }
+
+        function jobqCurrentFilters() {
+            return {
+                query: document.querySelector('input[name=queryInput]')?.value || '',
+                status: document.querySelector('select[name=statusFilter]')?.value || '',
+                sort: document.querySelector('select[name=sort]')?.value || 'created-desc',
+                size: document.querySelector('select[name=size]')?.value || '50',
+                scheduledOnly: !!document.querySelector('input[name=scheduledOnly]')?.checked,
+                retriedOnly: !!document.querySelector('input[name=retriedOnly]')?.checked
+            };
+        }
+
+        function jobqRenderSavedViews() {
+            const select = document.getElementById('jobq-saved-views');
+            if (!select) {
+                return;
+            }
+            const views = jobqSavedViews();
+            const options = ['<option value="">Saved view</option>']
+                .concat(views.map((view, index) => `<option value="${index}">${view.name}</option>`));
+            select.innerHTML = options.join('');
+        }
+
+        function jobqSaveCurrentView() {
+            const name = window.prompt('Name this saved view');
+            if (!name) {
+                return;
+            }
+            const views = jobqSavedViews();
+            views.push({ name, filters: jobqCurrentFilters() });
+            jobqWriteSavedViews(views);
+            jobqRenderSavedViews();
+        }
+
+        function jobqApplySavedView(indexValue) {
+            if (indexValue === '') {
+                return;
+            }
+            const view = jobqSavedViews()[Number(indexValue)];
+            if (!view) {
+                return;
+            }
+            const { query, status, sort, size, scheduledOnly, retriedOnly } = view.filters;
+            const queryInput = document.querySelector('input[name=queryInput]');
+            const statusFilter = document.querySelector('select[name=statusFilter]');
+            const sortSelect = document.querySelector('select[name=sort]');
+            const sizeSelect = document.querySelector('select[name=size]');
+            const scheduledCheckbox = document.querySelector('input[name=scheduledOnly]');
+            const retriedCheckbox = document.querySelector('input[name=retriedOnly]');
+            if (queryInput) queryInput.value = query || '';
+            if (statusFilter) statusFilter.value = status || '';
+            if (sortSelect) sortSelect.value = sort || 'created-desc';
+            if (sizeSelect) sizeSelect.value = size || '50';
+            if (scheduledCheckbox) scheduledCheckbox.checked = !!scheduledOnly;
+            if (retriedCheckbox) retriedCheckbox.checked = !!retriedOnly;
+            jobqRefresh(true);
+        }
+
+        async function jobqLoadSettings() {
+            try {
+                const response = await fetch('/jobq/htmx/settings', { credentials: 'same-origin' });
+                if (!response.ok) {
+                    return;
+                }
+                const settings = await response.json();
+                jobqSettings.readOnly = !!settings.readOnly;
+                const badge = document.getElementById('jobq-read-only-badge');
+                if (badge) {
+                    badge.classList.toggle('hidden', !jobqSettings.readOnly);
+                }
+                if (jobqSettings.readOnly) {
+                    document.querySelectorAll('[data-jobq-write]').forEach((element) => {
+                        element.setAttribute('disabled', 'disabled');
+                        element.classList.add('opacity-50', 'cursor-not-allowed');
+                    });
+                }
+            } catch (_error) {
+                // ignore
+            }
+        }
+
+        function jobqInitEventStream() {
+            if (!window.EventSource || jobqEventSource) {
+                return;
+            }
+            jobqEventSource = new EventSource('/jobq/htmx/stream');
+            jobqEventSource.addEventListener('refresh', () => jobqScheduleRefresh());
+            jobqEventSource.addEventListener('job-runtime', () => jobqScheduleRefresh());
+            jobqEventSource.onerror = () => {
+                if (jobqEventSource) {
+                    jobqEventSource.close();
+                    jobqEventSource = null;
+                }
+                setTimeout(jobqInitEventStream, 3000);
+            };
+        }
+
+        function jobqSetOpsTab(tabName) {
+            const activeTab = jobqOpsTabs.includes(tabName) ? tabName : 'queues';
+            localStorage.setItem('jobq:ops-tab', activeTab);
+            document.body.dataset.jobqOpsTab = activeTab;
+            jobqOpsTabs.forEach((tab) => {
+                const button = document.getElementById(`jobq-ops-tab-${tab}`);
+                const panel = document.getElementById(`jobq-ops-panel-${tab}`);
+                const isActive = tab === activeTab;
+                if (button) {
+                    button.classList.toggle('bg-indigo-600/90', isActive);
+                    button.classList.toggle('border-indigo-500/60', isActive);
+                    button.classList.toggle('text-white', isActive);
+                    button.classList.toggle('bg-slate-900/70', !isActive);
+                    button.classList.toggle('border-slate-700', !isActive);
+                    button.classList.toggle('text-slate-300', !isActive);
+                }
+                if (panel) {
+                    panel.classList.toggle('hidden', !isActive);
+                }
+            });
+            jobqLoadOpsTab(activeTab, false);
+        }
+
+        function jobqInitOpsTabs() {
+            jobqSetOpsTab(localStorage.getItem('jobq:ops-tab') || 'queues');
+        }
+
         document.addEventListener('jobqPagination', (event) => {
             const detail = event && event.detail ? event.detail : {};
             const page = Number.isFinite(detail.page) ? detail.page : (parseInt(detail.page || '0', 10) || 0);
@@ -295,6 +490,10 @@
         });
 
         document.addEventListener('DOMContentLoaded', () => {
+            jobqLoadSettings();
+            jobqRenderSavedViews();
+            jobqInitEventStream();
+            jobqInitOpsTabs();
             jobqSyncSelectionState();
             jobqSyncBatchActionState();
         });
@@ -379,6 +578,10 @@
         </div>
 
         <div class="flex items-center gap-4 text-sm font-medium">
+            <div id="jobq-read-only-badge"
+                class="hidden flex items-center gap-2 px-3 py-1 rounded-full bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs uppercase tracking-wider">
+                Read-only
+            </div>
             <div class="flex items-center gap-2 px-3 py-1 rounded-full bg-slate-800/50 border border-slate-700/50">
                 <span class="relative flex h-2.5 w-2.5">
                     <span
@@ -397,6 +600,7 @@
         <input type="hidden" name="page" value="0">
         <input type="hidden" name="query" value="">
         <input type="hidden" name="selectedIds" value="">
+        <input type="hidden" name="queueScope" value="interesting">
 
         <!-- Stats Container (Auto-refreshes every 5s) -->
         <div id="stats-container" hx-get="/jobq/htmx/stats"
@@ -424,6 +628,7 @@
                         <option value="PROCESSING">Processing</option>
                         <option value="COMPLETED">Completed</option>
                         <option value="FAILED">Failed</option>
+                        <option value="CANCELLED">Cancelled</option>
                     </select>
                 </div>
                 <div class="w-full sm:w-44">
@@ -472,6 +677,16 @@
                     </label>
                 </div>
                 <div class="flex items-center gap-2 lg:ml-auto">
+                    <select id="jobq-saved-views"
+                        class="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500/60"
+                        onchange="jobqApplySavedView(this.value)">
+                        <option value="">Saved view</option>
+                    </select>
+                    <button type="button"
+                        class="px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-slate-200 text-sm hover:bg-slate-700 transition"
+                        onclick="jobqSaveCurrentView()">
+                        Save view
+                    </button>
                     <button type="button"
                         class="px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-slate-200 text-sm hover:bg-slate-700 transition"
                         onclick="jobqRefresh(false)">
@@ -495,6 +710,7 @@
                     </button>
                 </div>
                 <button id="jobq-rerun-selected" type="button"
+                    data-jobq-write
                     class="px-3 py-2 rounded-lg bg-indigo-600 border border-indigo-500/60 text-white text-sm hover:bg-indigo-500 transition disabled:opacity-50 disabled:cursor-not-allowed"
                     hx-post="/jobq/htmx/jobs/rerun-selected"
                     hx-target="#jobq-action-feedback"
@@ -503,6 +719,36 @@
                     hx-include="[name='selectedIds']"
                     disabled>
                     Rerun selected
+                </button>
+                <button type="button"
+                    data-jobq-write
+                    class="px-3 py-2 rounded-lg bg-emerald-600/90 border border-emerald-500/60 text-white text-sm hover:bg-emerald-500 transition"
+                    hx-post="/jobq/htmx/jobs/rerun-filtered"
+                    hx-target="#jobq-action-feedback"
+                    hx-swap="innerHTML"
+                    hx-indicator="#jobq-loading-indicator"
+                    hx-include="[name='status'], [name='query'], [name='scheduledOnly'], [name='retriedOnly']">
+                    Rerun filtered
+                </button>
+                <button type="button"
+                    data-jobq-write
+                    class="px-3 py-2 rounded-lg bg-blue-600/90 border border-blue-500/60 text-white text-sm hover:bg-blue-500 transition"
+                    hx-post="/jobq/htmx/jobs/run-filtered-now"
+                    hx-target="#jobq-action-feedback"
+                    hx-swap="innerHTML"
+                    hx-indicator="#jobq-loading-indicator"
+                    hx-include="[name='status'], [name='query'], [name='scheduledOnly'], [name='retriedOnly']">
+                    Run delayed now
+                </button>
+                <button type="button"
+                    data-jobq-write
+                    class="px-3 py-2 rounded-lg bg-slate-700 border border-slate-600 text-white text-sm hover:bg-slate-600 transition"
+                    hx-post="/jobq/htmx/jobs/cancel-filtered"
+                    hx-target="#jobq-action-feedback"
+                    hx-swap="innerHTML"
+                    hx-indicator="#jobq-loading-indicator"
+                    hx-include="[name='status'], [name='query'], [name='scheduledOnly'], [name='retriedOnly']">
+                    Cancel filtered
                 </button>
                 <div class="flex flex-wrap items-end gap-2 lg:ml-auto">
                     <div>
@@ -530,6 +776,7 @@
                     </div>
                     <button type="button"
                         id="jobq-rerun-failed-since"
+                        data-jobq-write
                         class="px-3 py-2 rounded-lg bg-rose-600/90 border border-rose-500/60 text-white text-sm hover:bg-rose-500 transition disabled:opacity-50 disabled:cursor-not-allowed"
                         hx-post="/jobq/htmx/jobs/rerun-failed-since"
                         hx-target="#jobq-action-feedback"
@@ -601,6 +848,83 @@
                 </table>
             </div>
         </div>
+
+        <section class="mt-6 space-y-4">
+            <div class="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
+                <div>
+                    <h2 class="text-lg font-semibold text-slate-100 tracking-tight">Operations</h2>
+                    <p class="text-xs uppercase tracking-wider text-slate-500">Metrics, queue controls, recurring schedules, nodes, and audit</p>
+                </div>
+                <div class="flex flex-wrap gap-2">
+                    <button id="jobq-ops-tab-queues" type="button"
+                        class="px-3 py-2 rounded-lg border text-sm font-medium transition"
+                        onclick="jobqSetOpsTab('queues')">
+                        Queues
+                    </button>
+                    <button id="jobq-ops-tab-metrics" type="button"
+                        class="px-3 py-2 rounded-lg border text-sm font-medium transition"
+                        onclick="jobqSetOpsTab('metrics')">
+                        Metrics
+                    </button>
+                    <button id="jobq-ops-tab-recurring" type="button"
+                        class="px-3 py-2 rounded-lg border text-sm font-medium transition"
+                        onclick="jobqSetOpsTab('recurring')">
+                        Recurring
+                    </button>
+                    <button id="jobq-ops-tab-nodes" type="button"
+                        class="px-3 py-2 rounded-lg border text-sm font-medium transition"
+                        onclick="jobqSetOpsTab('nodes')">
+                        Nodes
+                    </button>
+                    <button id="jobq-ops-tab-audit" type="button"
+                        class="px-3 py-2 rounded-lg border text-sm font-medium transition"
+                        onclick="jobqSetOpsTab('audit')">
+                        Audit
+                    </button>
+                </div>
+            </div>
+
+            <div id="jobq-ops-panel-queues">
+                <div id="jobq-queues-panel"
+                    hx-get="/jobq/htmx/queues-panel"
+                    hx-trigger="jobq-load, jobq-queue-refresh from:body, every 15s [!document.hidden && document.body.dataset.jobqOpsTab === 'queues' && document.getElementById('jobq-auto-refresh') && document.getElementById('jobq-auto-refresh').checked]"
+                    hx-include="[name='queueScope']"
+                    hx-swap="innerHTML">
+                </div>
+            </div>
+
+            <div id="jobq-ops-panel-metrics" class="hidden">
+                <div id="jobq-metrics-panel"
+                    hx-get="/jobq/htmx/metrics-panel"
+                    hx-trigger="jobq-load, every 30s [!document.hidden && document.body.dataset.jobqOpsTab === 'metrics' && document.getElementById('jobq-auto-refresh') && document.getElementById('jobq-auto-refresh').checked]"
+                    hx-swap="innerHTML">
+                </div>
+            </div>
+
+            <div id="jobq-ops-panel-recurring" class="hidden">
+                <div id="jobq-recurring-panel"
+                    hx-get="/jobq/htmx/recurring-panel"
+                    hx-trigger="jobq-load, every 30s [!document.hidden && document.body.dataset.jobqOpsTab === 'recurring' && document.getElementById('jobq-auto-refresh') && document.getElementById('jobq-auto-refresh').checked]"
+                    hx-swap="innerHTML">
+                </div>
+            </div>
+
+            <div id="jobq-ops-panel-nodes" class="hidden">
+                <div id="jobq-nodes-panel"
+                    hx-get="/jobq/htmx/nodes-panel"
+                    hx-trigger="jobq-load, every 20s [!document.hidden && document.body.dataset.jobqOpsTab === 'nodes' && document.getElementById('jobq-auto-refresh') && document.getElementById('jobq-auto-refresh').checked]"
+                    hx-swap="innerHTML">
+                </div>
+            </div>
+
+            <div id="jobq-ops-panel-audit" class="hidden">
+                <div id="jobq-audit-panel"
+                    hx-get="/jobq/htmx/audit-panel"
+                    hx-trigger="jobq-load, every 20s [!document.hidden && document.body.dataset.jobqOpsTab === 'audit' && document.getElementById('jobq-auto-refresh') && document.getElementById('jobq-auto-refresh').checked]"
+                    hx-swap="innerHTML">
+                </div>
+            </div>
+        </section>
     </main>
 
     <!-- Slide-over Modal Target -->

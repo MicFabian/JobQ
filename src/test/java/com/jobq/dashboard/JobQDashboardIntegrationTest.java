@@ -143,7 +143,7 @@ class JobQDashboardIntegrationTest {
                 .getResponse()
                 .getContentAsString();
 
-        assertEquals(List.of(4, 1, 1, 1, 1), extractStatsNumbers(html));
+        assertEquals(List.of(4, 1, 1, 1, 1, 0), extractStatsNumbers(html));
     }
 
     @Test

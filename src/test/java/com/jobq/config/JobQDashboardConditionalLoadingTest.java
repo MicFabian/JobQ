@@ -6,9 +6,12 @@ import static org.mockito.Mockito.mock;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.jobq.JobRepository;
+import com.jobq.dashboard.JobPayloadRedactor;
 import com.jobq.dashboard.JobQAuthInterceptor;
 import com.jobq.dashboard.JobQDashboardController;
 import com.jobq.dashboard.JobQWebMvcConfigurer;
+import com.jobq.internal.JobOperationsService;
+import com.jobq.internal.JobTypeMetadataRegistry;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 
@@ -20,6 +23,9 @@ class JobQDashboardConditionalLoadingTest {
             .withBean(JobQProperties.class, JobQProperties::new)
             .withBean(JobRepository.class, () -> mock(JobRepository.class))
             .withBean(ObjectMapper.class, ObjectMapper::new)
+            .withBean(JobOperationsService.class, () -> mock(JobOperationsService.class))
+            .withBean(JobTypeMetadataRegistry.class, () -> mock(JobTypeMetadataRegistry.class))
+            .withBean(JobPayloadRedactor.class, () -> new JobPayloadRedactor(new JobQProperties()))
             .withBean(JobQAuthInterceptor.class, () -> new JobQAuthInterceptor(new JobQProperties()));
 
     @Test

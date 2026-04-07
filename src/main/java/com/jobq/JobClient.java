@@ -3,11 +3,17 @@ package com.jobq;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.jobq.config.JobQProperties;
+import com.jobq.internal.JobSignalPublisher;
 import com.jobq.internal.JobTypeMetadataRegistry;
+import java.sql.PreparedStatement;
+import java.sql.SQLException;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.List;
 import java.util.UUID;
 import java.util.regex.Pattern;
 import org.slf4j.Logger;
@@ -30,8 +36,10 @@ public class JobClient {
     private final JdbcTemplate jdbcTemplate;
     private final String jobTableName;
     private final String dedupUpsertSql;
+    private final String batchInsertSql;
     private final String synchronizeGroupDelaySql;
     private final JobTypeMetadataRegistry jobTypeMetadataRegistry;
+    private final JobSignalPublisher jobSignalPublisher;
 
     @Autowired
     public JobClient(
@@ -39,14 +47,17 @@ public class JobClient {
             ObjectMapper objectMapper,
             JobQProperties properties,
             JdbcTemplate jdbcTemplate,
-            JobTypeMetadataRegistry jobTypeMetadataRegistry) {
+            JobTypeMetadataRegistry jobTypeMetadataRegistry,
+            JobSignalPublisher jobSignalPublisher) {
         this.jobRepository = jobRepository;
         this.objectMapper = objectMapper;
         this.properties = properties;
         this.jdbcTemplate = jdbcTemplate;
         this.jobTypeMetadataRegistry = jobTypeMetadataRegistry;
+        this.jobSignalPublisher = jobSignalPublisher;
         this.jobTableName = resolveJobTableName(properties.getDatabase().getTablePrefix());
         this.dedupUpsertSql = buildDedupUpsertSql(jobTableName);
+        this.batchInsertSql = buildBatchInsertSql(jobTableName);
         this.synchronizeGroupDelaySql = buildSynchronizeGroupDelaySql(jobTableName);
     }
 
@@ -54,8 +65,17 @@ public class JobClient {
             JobRepository jobRepository,
             ObjectMapper objectMapper,
             JobQProperties properties,
+            JdbcTemplate jdbcTemplate,
+            JobTypeMetadataRegistry jobTypeMetadataRegistry) {
+        this(jobRepository, objectMapper, properties, jdbcTemplate, jobTypeMetadataRegistry, null);
+    }
+
+    JobClient(
+            JobRepository jobRepository,
+            ObjectMapper objectMapper,
+            JobQProperties properties,
             JdbcTemplate jdbcTemplate) {
-        this(jobRepository, objectMapper, properties, jdbcTemplate, null);
+        this(jobRepository, objectMapper, properties, jdbcTemplate, null, null);
     }
 
     /**
@@ -114,6 +134,50 @@ public class JobClient {
      */
     public UUID enqueue(Class<?> jobClass, Object payload, String groupId, String replaceKey) {
         return enqueue(resolveJobType(jobClass), payload, groupId, replaceKey);
+    }
+
+    /**
+     * Enqueue multiple jobs of the same type efficiently using JDBC batching.
+     */
+    public List<UUID> enqueueAll(String type, Collection<?> payloads) {
+        return enqueueAll(type, payloads, resolveDefaultMaxRetries(type), null);
+    }
+
+    /**
+     * Enqueue multiple jobs by class efficiently using JDBC batching.
+     */
+    public List<UUID> enqueueAll(Class<?> jobClass, Collection<?> payloads) {
+        return enqueueAll(resolveJobType(jobClass), payloads);
+    }
+
+    /**
+     * Enqueue multiple jobs of the same type to run at the provided instant.
+     */
+    public List<UUID> enqueueAllAt(String type, Collection<?> payloads, Instant runAt) {
+        return enqueueAll(type, payloads, resolveDefaultMaxRetries(type), normalizeRequiredRunAt(runAt));
+    }
+
+    /**
+     * Enqueue multiple jobs by class to run at the provided instant.
+     */
+    public List<UUID> enqueueAllAt(Class<?> jobClass, Collection<?> payloads, Instant runAt) {
+        String jobType = resolveJobType(jobClass);
+        return enqueueAll(jobType, payloads, resolveDefaultMaxRetries(jobType), normalizeRequiredRunAt(runAt));
+    }
+
+    /**
+     * Enqueue multiple jobs of the same type to run at the provided date-time.
+     */
+    public List<UUID> enqueueAllAt(String type, Collection<?> payloads, OffsetDateTime runAt) {
+        return enqueueAll(type, payloads, resolveDefaultMaxRetries(type), normalizeRequiredRunAt(runAt));
+    }
+
+    /**
+     * Enqueue multiple jobs by class to run at the provided date-time.
+     */
+    public List<UUID> enqueueAllAt(Class<?> jobClass, Collection<?> payloads, OffsetDateTime runAt) {
+        String jobType = resolveJobType(jobClass);
+        return enqueueAll(jobType, payloads, resolveDefaultMaxRetries(jobType), normalizeRequiredRunAt(runAt));
     }
 
     /**
@@ -229,6 +293,7 @@ public class JobClient {
                     dedupedId,
                     normalizedType,
                     normalizedReplaceKey);
+            notifyIfDue(normalizedType, resolvedRunAt, now);
             return dedupedId;
         }
 
@@ -239,8 +304,34 @@ public class JobClient {
         job.setUpdatedAt(now);
         jobRepository.save(job);
         synchronizeGroupedDelayIfConfigured(normalizedType, normalizedGroupId, resolvedRunAt, now);
+        notifyIfDue(normalizedType, resolvedRunAt, now);
         log.debug("Enqueued job {} of type {}", jobId, normalizedType);
         return jobId;
+    }
+
+    private List<UUID> enqueueAll(String type, Collection<?> payloads, int maxRetries, OffsetDateTime explicitRunAt) {
+        String normalizedType = normalizeRequiredType(type);
+        validateMaxRetries(maxRetries);
+        if (payloads == null || payloads.isEmpty()) {
+            return List.of();
+        }
+
+        OffsetDateTime now = OffsetDateTime.now();
+        OffsetDateTime resolvedRunAt = resolveRunAt(normalizedType, explicitRunAt, now);
+        List<Object> payloadList = new ArrayList<>(payloads.size());
+        payloadList.addAll(payloads);
+        List<UUID> ids = new ArrayList<>(payloadList.size());
+
+        jdbcTemplate.batchUpdate(
+                batchInsertSql,
+                payloadList,
+                Math.min(payloadList.size(), 1_000),
+                (PreparedStatement preparedStatement, Object payload) -> bindBatchInsert(
+                        preparedStatement, ids, normalizedType, payload, resolvedRunAt, now, maxRetries));
+
+        notifyIfDue(normalizedType, resolvedRunAt, now);
+        log.debug("Batch-enqueued {} jobs of type {}", ids.size(), normalizedType);
+        return List.copyOf(ids);
     }
 
     private String normalizeRequiredType(String type) {
@@ -393,6 +484,32 @@ public class JobClient {
         return resultingId;
     }
 
+    private void bindBatchInsert(
+            PreparedStatement preparedStatement,
+            List<UUID> ids,
+            String type,
+            Object payload,
+            OffsetDateTime runAt,
+            OffsetDateTime now,
+            int maxRetries)
+            throws SQLException {
+        UUID jobId = UUID.randomUUID();
+        ids.add(jobId);
+        JsonNode jsonNode = payload != null ? objectMapper.valueToTree(payload) : null;
+        preparedStatement.setObject(1, jobId);
+        preparedStatement.setString(2, type);
+        preparedStatement.setString(3, jsonNode == null ? null : jsonNode.toString());
+        preparedStatement.setObject(4, runAt);
+        preparedStatement.setObject(5, now);
+        preparedStatement.setInt(6, maxRetries);
+    }
+
+    private void notifyIfDue(String jobType, OffsetDateTime runAt, OffsetDateTime now) {
+        if (jobSignalPublisher != null) {
+            jobSignalPublisher.notifyIfDue(jobType, runAt, now);
+        }
+    }
+
     private String resolveJobTableName(String tablePrefix) {
         String prefix = tablePrefix == null ? "" : tablePrefix.trim();
         String tableName = prefix + "jobq_jobs";
@@ -425,6 +542,14 @@ public class JobClient {
                   locked_at = NULL,
                   locked_by = NULL
                 RETURNING id
+                """
+                .formatted(tableName);
+    }
+
+    private String buildBatchInsertSql(String tableName) {
+        return """
+                INSERT INTO %1$s (id, type, payload, run_at, updated_at, max_retries, priority)
+                VALUES (?, ?, CAST(? AS jsonb), ?, ?, ?, 0)
                 """
                 .formatted(tableName);
     }

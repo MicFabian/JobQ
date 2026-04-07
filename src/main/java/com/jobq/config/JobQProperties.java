@@ -1,5 +1,7 @@
 package com.jobq.config;
 
+import java.util.ArrayList;
+import java.util.List;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 @ConfigurationProperties(prefix = "jobq")
@@ -84,6 +86,11 @@ public class JobQProperties {
         private boolean enabled = true;
         private int workerCount = Math.max(2, Runtime.getRuntime().availableProcessors());
         private long pollIntervalInSeconds = 15;
+        private boolean notifyEnabled = true;
+        private String notifyChannel = "jobq_jobs_available";
+        private int notifyListenTimeoutMs = 1_000;
+        private long executionTimeoutCheckIntervalInSeconds = 30;
+        private long nodeHeartbeatIntervalInSeconds = 10;
         private String deleteSucceededJobsAfter = "36h";
         private String permanentlyDeleteDeletedJobsAfter = "72h";
 
@@ -111,6 +118,46 @@ public class JobQProperties {
             this.pollIntervalInSeconds = pollIntervalInSeconds;
         }
 
+        public boolean isNotifyEnabled() {
+            return notifyEnabled;
+        }
+
+        public void setNotifyEnabled(boolean notifyEnabled) {
+            this.notifyEnabled = notifyEnabled;
+        }
+
+        public String getNotifyChannel() {
+            return notifyChannel;
+        }
+
+        public void setNotifyChannel(String notifyChannel) {
+            this.notifyChannel = notifyChannel;
+        }
+
+        public int getNotifyListenTimeoutMs() {
+            return notifyListenTimeoutMs;
+        }
+
+        public void setNotifyListenTimeoutMs(int notifyListenTimeoutMs) {
+            this.notifyListenTimeoutMs = notifyListenTimeoutMs;
+        }
+
+        public long getExecutionTimeoutCheckIntervalInSeconds() {
+            return executionTimeoutCheckIntervalInSeconds;
+        }
+
+        public void setExecutionTimeoutCheckIntervalInSeconds(long executionTimeoutCheckIntervalInSeconds) {
+            this.executionTimeoutCheckIntervalInSeconds = executionTimeoutCheckIntervalInSeconds;
+        }
+
+        public long getNodeHeartbeatIntervalInSeconds() {
+            return nodeHeartbeatIntervalInSeconds;
+        }
+
+        public void setNodeHeartbeatIntervalInSeconds(long nodeHeartbeatIntervalInSeconds) {
+            this.nodeHeartbeatIntervalInSeconds = nodeHeartbeatIntervalInSeconds;
+        }
+
         public String getDeleteSucceededJobsAfter() {
             return deleteSucceededJobsAfter;
         }
@@ -135,6 +182,8 @@ public class JobQProperties {
         private String requiredRole = "JOBQ_DASHBOARD";
         private String username = "";
         private String password = "";
+        private boolean readOnly = false;
+        private List<String> redactedPayloadFields = new ArrayList<>();
 
         public boolean isEnabled() {
             return enabled;
@@ -182,6 +231,22 @@ public class JobQProperties {
 
         public void setPassword(String password) {
             this.password = password;
+        }
+
+        public boolean isReadOnly() {
+            return readOnly;
+        }
+
+        public void setReadOnly(boolean readOnly) {
+            this.readOnly = readOnly;
+        }
+
+        public List<String> getRedactedPayloadFields() {
+            return redactedPayloadFields;
+        }
+
+        public void setRedactedPayloadFields(List<String> redactedPayloadFields) {
+            this.redactedPayloadFields = redactedPayloadFields == null ? new ArrayList<>() : redactedPayloadFields;
         }
 
         public enum AuthMode {

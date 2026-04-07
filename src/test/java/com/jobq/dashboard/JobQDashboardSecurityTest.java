@@ -62,6 +62,11 @@ class JobQDashboardSecurityTest {
             public Long getFailedCount() {
                 return 0L;
             }
+
+            @Override
+            public Long getCancelledCount() {
+                return 0L;
+            }
         };
     }
 

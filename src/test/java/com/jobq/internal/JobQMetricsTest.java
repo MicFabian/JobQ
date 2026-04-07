@@ -33,6 +33,7 @@ class JobQMetricsTest {
         when(counts.getProcessingCount()).thenReturn(5L);
         when(counts.getCompletedCount()).thenReturn(100L);
         when(counts.getFailedCount()).thenReturn(2L);
+        when(counts.getCancelledCount()).thenReturn(3L);
         when(jobRepository.countLifecycleCounts()).thenReturn(counts);
 
         jobQMetrics.registerMetrics();
@@ -51,7 +52,7 @@ class JobQMetricsTest {
 
         Gauge totalGauge = meterRegistry.find("jobq.jobs.total").gauge();
         assertThat(totalGauge).isNotNull();
-        assertThat(totalGauge.value()).isEqualTo(117.0);
+        assertThat(totalGauge.value()).isEqualTo(120.0);
 
         verify(jobRepository, times(1)).countLifecycleCounts();
     }

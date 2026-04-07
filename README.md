@@ -12,8 +12,13 @@ If your business write and job enqueue must succeed or fail together, JobQ is de
 - Built-in retries, backoff, priority shifting, and expected-exception completion
 - Recurring jobs via `cron` on `@Job`
 - Delayed and explicit-time scheduling (`initialDelayMs`, `enqueueAt`)
+- Batch enqueue APIs for high-throughput inserts
 - Deduplication via `replaceKey` with configurable run-at replacement behavior
-- Built-in HTMX dashboard (filters, sorting, retry/rerun actions, details)
+- Queue-level pause/resume, concurrency, rate-limit, and cooldown controls
+- PostgreSQL `LISTEN/NOTIFY` wakeups to reduce idle poll latency
+- Attempt fencing with execution timeouts (`@Job(maxExecutionMs = ...)`)
+- Job runtime progress + structured runtime logs via `JobRuntime`
+- Built-in HTMX dashboard (filters, sorting, retry/rerun/cancel/run-now actions, details, SSE refresh)
 - Optional Micrometer metrics with zero hard dependency on actuator/micrometer
 - Built-in schema migration mechanism for starter upgrades
 
@@ -42,6 +47,36 @@ implementation 'io.github.micfabian:jobq-spring-boot-starter:<latest-version>'
   <version><!-- latest --></version>
 </dependency>
 ```
+
+## Contributor Checks
+
+Run the dashboard smoke test to boot the test app, seed representative dashboard data, and validate the UI with a real headless browser.
+
+Requirements:
+
+- Docker
+- Java 25
+- Node.js / `npm`
+
+Install the smoke-test dependency bundle once:
+
+```bash
+npm ci --prefix scripts
+```
+
+Run the smoke test:
+
+```bash
+./scripts/dashboard-smoke.sh
+```
+
+If the Playwright browser runtime is not installed yet, run:
+
+```bash
+JOBQ_SMOKE_INSTALL_BROWSER=1 ./scripts/dashboard-smoke.sh
+```
+
+The script writes screenshots, trace data, page HTML, and browser/network logs to `output/playwright/dashboard-smoke/`.
 
 ## Quick Start
 
@@ -155,6 +190,36 @@ Supported annotation-driven `onSuccess(...)` and `after(...)` signatures:
 - `onSuccess(Payload payload)` / `after(Payload payload)`
 - `onSuccess(UUID jobId, Payload payload)` / `after(UUID jobId, Payload payload)`
 
+### Job Runtime API
+
+Inject `JobRuntime` when a job should report progress or emit structured runtime logs to the dashboard.
+
+```java
+import com.jobq.JobRuntime;
+import com.jobq.annotation.Job;
+import org.springframework.stereotype.Component;
+
+import java.util.UUID;
+
+@Component
+@Job(payload = ImportPayload.class)
+public class ImportJob {
+
+    private final JobRuntime jobRuntime;
+
+    public ImportJob(JobRuntime jobRuntime) {
+        this.jobRuntime = jobRuntime;
+    }
+
+    public void process(UUID jobId, ImportPayload payload) {
+        jobRuntime.logInfo("Starting import for " + payload.customerId());
+        jobRuntime.setProgress(25, "Fetched source data");
+        jobRuntime.setProgress(75, "Validated records");
+        jobRuntime.logInfo("Import complete");
+    }
+}
+```
+
 ### Annotation + `JobLifecycle<T>` (Optional Structured Contract)
 
 Use this when you want compile-time lifecycle structure while still registering via `@Job`.
@@ -246,6 +311,10 @@ jobClient.enqueue(MyJob.class, payload, "reports", "customer-123");
 // explicit run time
 jobClient.enqueueAt(MyJob.class, payload, java.time.Instant.now().plusSeconds(90));
 jobClient.enqueueAt(MyJob.class, payload, java.time.OffsetDateTime.now().plusMinutes(2));
+
+// bulk enqueue
+jobClient.enqueueAll(MyJob.class, java.util.List.of(payload1, payload2, payload3));
+jobClient.enqueueAllAt(MyJob.class, java.util.List.of(payload1, payload2), java.time.Instant.now().plusSeconds(30));
 ```
 
 ### Default retries behavior
@@ -265,6 +334,7 @@ Job status is derived from lifecycle timestamps:
 - `PROCESSING`: `processing_started_at IS NOT NULL`, `finished_at IS NULL`, `failed_at IS NULL`
 - `COMPLETED`: `finished_at IS NOT NULL`
 - `FAILED`: `failed_at IS NOT NULL`
+- `CANCELLED`: `cancelled_at IS NOT NULL`
 
 ### Retry behavior
 
@@ -303,6 +373,20 @@ If thrown exception (or one of its causes) matches the whitelist:
 - `onSuccess(...)` exceptions are logged and do not change completion state
 - `after(...)` exceptions are logged and do not alter persisted outcome
 
+### Execution timeout fencing
+
+```java
+@Job(maxExecutionMs = 30_000)
+class RemoteSyncJob { ... }
+```
+
+If one claimed attempt runs past `maxExecutionMs`:
+
+- the old lock token is fenced off
+- `retry_count` is incremented
+- the attempt is retried or terminally failed using normal retry rules
+- a late completion from the timed-out attempt cannot overwrite the newer state
+
 ## Scheduling
 
 ### Initial delay
@@ -329,6 +413,23 @@ Behavior:
 
 - On startup, JobQ ensures one active execution exists for each recurring definition
 - On successful completion, JobQ schedules the next run from cron expression
+
+Recurring jobs can also define how missed runs are handled after downtime:
+
+```java
+@Job(
+    cron = "0 */5 * * * *",
+    cronMisfirePolicy = Job.CronMisfirePolicy.CATCH_UP,
+    maxCatchUpExecutions = 12
+)
+class CleanupJob { ... }
+```
+
+Options:
+
+- `SKIP`: jump to the next future cron occurrence
+- `FIRE_ONCE`: enqueue one immediate recovery execution, then continue normally
+- `CATCH_UP`: backfill missed executions sequentially up to `maxCatchUpExecutions`
 
 ## Deduplication and Grouping
 
@@ -393,7 +494,44 @@ Default path: `/jobq/dashboard` (configurable).
 - Silent polling with optional auto-refresh toggle
 - Reliability column (`retryCount / maxRetries`)
 - Failure details preview in list + full detail panel
-- Retry failed jobs and rerun completed jobs
+- Runtime panel with job progress and runtime logs
+- Retry failed jobs, rerun completed jobs, cancel pending jobs, and run delayed jobs immediately
+- Batch actions across the active filter: rerun selected, rerun filtered failures since a timestamp, run filtered delayed jobs now, cancel filtered jobs
+- Operational panels for queue controls, recurring jobs, worker nodes, metrics, and dashboard audit events
+
+### Queue Controls
+
+The dashboard can persist per-job-type operational controls without redeploying the application:
+
+- pause / resume dispatch
+- max concurrency
+- rate limit per minute
+- dispatch cooldown in milliseconds
+
+These controls are stored in `jobq_queue_controls` so they survive restarts.
+
+### Read-Only Mode and Payload Redaction
+
+For production support or observer users, the dashboard can be switched to read-only mode:
+
+```yaml
+jobq:
+  dashboard:
+    read-only: true
+```
+
+Write actions remain server-side blocked even if a client attempts to invoke them directly.
+
+Payload fields can also be redacted before they are rendered in the details drawer:
+
+```yaml
+jobq:
+  dashboard:
+    redacted-payload-fields:
+      - password
+      - token
+      - accessKey
+```
 
 ### Security modes
 
@@ -440,6 +578,11 @@ jobq:
     enabled: true
     worker-count: 4
     poll-interval-in-seconds: 15
+    notify-enabled: true
+    notify-channel: jobq_jobs_available
+    notify-listen-timeout-ms: 1000
+    execution-timeout-check-interval-in-seconds: 30
+    node-heartbeat-interval-in-seconds: 10
     delete-succeeded-jobs-after: 36h
     permanently-delete-deleted-jobs-after: 72h
 
@@ -455,6 +598,8 @@ jobq:
     required-role: JOBQ_DASHBOARD  # SPRING_SECURITY mode
     username: ""                  # BASIC mode
     password: ""                  # BASIC mode
+    read-only: false
+    redacted-payload-fields: []
 ```
 
 ## Schema and Migrations
@@ -471,6 +616,12 @@ Migration behavior:
 - PostgreSQL advisory lock to avoid multi-node race during migration
 
 Main job table: `jobq_jobs` (prefix-aware).
+
+Runtime tuning included by default:
+
+- queue-table storage settings for update-heavy workloads
+- timeout lookup index for stuck-attempt rescue
+- trigram search indexes for dashboard filter/search performance
 
 Disable built-in migrations if your platform manages DDL externally:
 
@@ -497,7 +648,7 @@ jobq:
 ```
 
 - `loadTest`: stress scenarios (concurrency, dedup contention, retries)
-- `perfTest`: benchmark-oriented throughput/timing scenarios
+- `perfTest`: benchmark-oriented throughput/timing scenarios, including batch enqueue
 
 ## Publishing (Maintainers)
 

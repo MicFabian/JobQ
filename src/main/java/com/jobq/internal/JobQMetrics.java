@@ -49,6 +49,11 @@ public class JobQMetrics {
                 .tag("status", "FAILED")
                 .register(meterRegistry);
 
+        Gauge.builder("jobq.jobs.count", this, metrics -> metrics.countFor(Status.CANCELLED))
+                .description("Number of JobQ jobs")
+                .tag("status", "CANCELLED")
+                .register(meterRegistry);
+
         Gauge.builder("jobq.jobs.total", this, JobQMetrics::totalCount)
                 .description("Total number of JobQ jobs in the database")
                 .register(meterRegistry);
@@ -61,6 +66,7 @@ public class JobQMetrics {
             case PROCESSING -> snapshot.processingCount();
             case COMPLETED -> snapshot.completedCount();
             case FAILED -> snapshot.failedCount();
+            case CANCELLED -> snapshot.cancelledCount();
         };
     }
 
@@ -69,7 +75,8 @@ public class JobQMetrics {
         return snapshot.pendingCount()
                 + snapshot.processingCount()
                 + snapshot.completedCount()
-                + snapshot.failedCount();
+                + snapshot.failedCount()
+                + snapshot.cancelledCount();
     }
 
     private LifecycleSnapshot getSnapshot() {
@@ -97,7 +104,8 @@ public class JobQMetrics {
                     countOrZero(counts.getPendingCount()),
                     countOrZero(counts.getProcessingCount()),
                     countOrZero(counts.getCompletedCount()),
-                    countOrZero(counts.getFailedCount()));
+                    countOrZero(counts.getFailedCount()),
+                    countOrZero(counts.getCancelledCount()));
         } catch (Exception e) {
             log.trace("Failed to query lifecycle counts for metrics: {}", e.getMessage());
             return LifecycleSnapshot.empty();
@@ -112,12 +120,14 @@ public class JobQMetrics {
         PENDING,
         PROCESSING,
         COMPLETED,
-        FAILED
+        FAILED,
+        CANCELLED
     }
 
-    private record LifecycleSnapshot(long pendingCount, long processingCount, long completedCount, long failedCount) {
+    private record LifecycleSnapshot(
+            long pendingCount, long processingCount, long completedCount, long failedCount, long cancelledCount) {
         private static LifecycleSnapshot empty() {
-            return new LifecycleSnapshot(0, 0, 0, 0);
+            return new LifecycleSnapshot(0, 0, 0, 0, 0);
         }
     }
 }

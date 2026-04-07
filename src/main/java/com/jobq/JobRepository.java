@@ -30,6 +30,8 @@ public interface JobRepository extends JpaRepository<Job, UUID> {
         Long getCompletedCount();
 
         Long getFailedCount();
+
+        Long getCancelledCount();
     }
 
     /**
@@ -61,6 +63,12 @@ public interface JobRepository extends JpaRepository<Job, UUID> {
         OffsetDateTime getFailedAt();
 
         String getErrorMessage();
+
+        OffsetDateTime getCancelledAt();
+
+        Integer getProgressPercent();
+
+        String getProgressMessage();
     }
 
     @Query(
@@ -78,13 +86,17 @@ public interface JobRepository extends JpaRepository<Job, UUID> {
               j.processingStartedAt AS processingStartedAt,
               j.finishedAt AS finishedAt,
               j.failedAt AS failedAt,
-              j.errorMessage AS errorMessage
+              j.errorMessage AS errorMessage,
+              j.cancelledAt AS cancelledAt,
+              j.progressPercent AS progressPercent,
+              j.progressMessage AS progressMessage
             FROM Job j
             WHERE (
-              (:status = 'PENDING' AND j.processingStartedAt IS NULL AND j.finishedAt IS NULL AND j.failedAt IS NULL)
-              OR (:status = 'PROCESSING' AND j.processingStartedAt IS NOT NULL AND j.finishedAt IS NULL AND j.failedAt IS NULL)
+              (:status = 'PENDING' AND j.processingStartedAt IS NULL AND j.finishedAt IS NULL AND j.failedAt IS NULL AND j.cancelledAt IS NULL)
+              OR (:status = 'PROCESSING' AND j.processingStartedAt IS NOT NULL AND j.finishedAt IS NULL AND j.failedAt IS NULL AND j.cancelledAt IS NULL)
               OR (:status = 'COMPLETED' AND j.finishedAt IS NOT NULL)
               OR (:status = 'FAILED' AND j.failedAt IS NOT NULL)
+              OR (:status = 'CANCELLED' AND j.cancelledAt IS NOT NULL)
               OR (:status = '')
             )
               AND (:scheduledOnly = false OR j.runAt > CURRENT_TIMESTAMP)
@@ -98,13 +110,16 @@ public interface JobRepository extends JpaRepository<Job, UUID> {
                 OR (LOWER(:query) = 'pending'
                     AND j.processingStartedAt IS NULL
                     AND j.finishedAt IS NULL
-                    AND j.failedAt IS NULL)
+                    AND j.failedAt IS NULL
+                    AND j.cancelledAt IS NULL)
                 OR (LOWER(:query) = 'processing'
                     AND j.processingStartedAt IS NOT NULL
                     AND j.finishedAt IS NULL
-                    AND j.failedAt IS NULL)
+                    AND j.failedAt IS NULL
+                    AND j.cancelledAt IS NULL)
                 OR (LOWER(:query) = 'completed' AND j.finishedAt IS NOT NULL)
                 OR (LOWER(:query) = 'failed' AND j.failedAt IS NOT NULL)
+                OR (LOWER(:query) = 'cancelled' AND j.cancelledAt IS NOT NULL)
                 OR (:jobIdProvided = true AND j.id = :jobId)
               )
             """)
@@ -127,6 +142,7 @@ public interface JobRepository extends JpaRepository<Job, UUID> {
               AND j.processingStartedAt IS NULL
               AND j.finishedAt IS NULL
               AND j.failedAt IS NULL
+              AND j.cancelledAt IS NULL
               AND j.runAt <= CURRENT_TIMESTAMP
             ORDER BY j.priority DESC, j.createdAt ASC
             """)
@@ -134,10 +150,26 @@ public interface JobRepository extends JpaRepository<Job, UUID> {
 
     @Query(
             """
+            SELECT DISTINCT j.groupId FROM Job j
+            WHERE j.type = :type
+              AND j.groupId IS NOT NULL
+              AND j.groupId <> ''
+              AND j.processingStartedAt IS NULL
+              AND j.finishedAt IS NULL
+              AND j.failedAt IS NULL
+              AND j.cancelledAt IS NULL
+              AND j.runAt <= CURRENT_TIMESTAMP
+            """)
+    @QueryHints(@QueryHint(name = "org.hibernate.readOnly", value = "true"))
+    List<String> findDueActiveGroupIds(@Param("type") String type, Pageable pageable);
+
+    @Query(
+            """
             SELECT j FROM Job j
             WHERE j.processingStartedAt IS NULL
               AND j.finishedAt IS NULL
               AND j.failedAt IS NULL
+              AND j.cancelledAt IS NULL
             """)
     @QueryHints(@QueryHint(name = "org.hibernate.readOnly", value = "true"))
     Slice<Job> findPendingJobs(Pageable pageable);
@@ -157,11 +189,15 @@ public interface JobRepository extends JpaRepository<Job, UUID> {
               j.processingStartedAt AS processingStartedAt,
               j.finishedAt AS finishedAt,
               j.failedAt AS failedAt,
-              j.errorMessage AS errorMessage
+              j.errorMessage AS errorMessage,
+              j.cancelledAt AS cancelledAt,
+              j.progressPercent AS progressPercent,
+              j.progressMessage AS progressMessage
             FROM Job j
             WHERE j.processingStartedAt IS NULL
               AND j.finishedAt IS NULL
               AND j.failedAt IS NULL
+              AND j.cancelledAt IS NULL
             """)
     @QueryHints(@QueryHint(name = "org.hibernate.readOnly", value = "true"))
     Slice<DashboardJobView> findPendingJobViews(Pageable pageable);
@@ -172,9 +208,25 @@ public interface JobRepository extends JpaRepository<Job, UUID> {
             WHERE j.processingStartedAt IS NOT NULL
               AND j.finishedAt IS NULL
               AND j.failedAt IS NULL
+              AND j.cancelledAt IS NULL
             """)
     @QueryHints(@QueryHint(name = "org.hibernate.readOnly", value = "true"))
     Slice<Job> findProcessingJobs(Pageable pageable);
+
+    @Query(
+            """
+            SELECT j FROM Job j
+            WHERE j.type = :type
+              AND j.processingStartedAt IS NOT NULL
+              AND j.finishedAt IS NULL
+              AND j.failedAt IS NULL
+              AND j.cancelledAt IS NULL
+              AND j.lockedAt <= :lockedBefore
+            ORDER BY j.lockedAt ASC
+            """)
+    @QueryHints(@QueryHint(name = "org.hibernate.readOnly", value = "true"))
+    Slice<Job> findTimedOutProcessingJobs(
+            @Param("type") String type, @Param("lockedBefore") OffsetDateTime lockedBefore, Pageable pageable);
 
     @Query(
             """
@@ -191,11 +243,15 @@ public interface JobRepository extends JpaRepository<Job, UUID> {
               j.processingStartedAt AS processingStartedAt,
               j.finishedAt AS finishedAt,
               j.failedAt AS failedAt,
-              j.errorMessage AS errorMessage
+              j.errorMessage AS errorMessage,
+              j.cancelledAt AS cancelledAt,
+              j.progressPercent AS progressPercent,
+              j.progressMessage AS progressMessage
             FROM Job j
             WHERE j.processingStartedAt IS NOT NULL
               AND j.finishedAt IS NULL
               AND j.failedAt IS NULL
+              AND j.cancelledAt IS NULL
             """)
     @QueryHints(@QueryHint(name = "org.hibernate.readOnly", value = "true"))
     Slice<DashboardJobView> findProcessingJobViews(Pageable pageable);
@@ -219,7 +275,10 @@ public interface JobRepository extends JpaRepository<Job, UUID> {
               j.processingStartedAt AS processingStartedAt,
               j.finishedAt AS finishedAt,
               j.failedAt AS failedAt,
-              j.errorMessage AS errorMessage
+              j.errorMessage AS errorMessage,
+              j.cancelledAt AS cancelledAt,
+              j.progressPercent AS progressPercent,
+              j.progressMessage AS progressMessage
             FROM Job j
             WHERE j.finishedAt IS NOT NULL
             """)
@@ -245,7 +304,10 @@ public interface JobRepository extends JpaRepository<Job, UUID> {
               j.processingStartedAt AS processingStartedAt,
               j.finishedAt AS finishedAt,
               j.failedAt AS failedAt,
-              j.errorMessage AS errorMessage
+              j.errorMessage AS errorMessage,
+              j.cancelledAt AS cancelledAt,
+              j.progressPercent AS progressPercent,
+              j.progressMessage AS progressMessage
             FROM Job j
             WHERE j.failedAt IS NOT NULL
             """)
@@ -271,7 +333,10 @@ public interface JobRepository extends JpaRepository<Job, UUID> {
               j.processingStartedAt AS processingStartedAt,
               j.finishedAt AS finishedAt,
               j.failedAt AS failedAt,
-              j.errorMessage AS errorMessage
+              j.errorMessage AS errorMessage,
+              j.cancelledAt AS cancelledAt,
+              j.progressPercent AS progressPercent,
+              j.progressMessage AS progressMessage
             FROM Job j
             """)
     @QueryHints(@QueryHint(name = "org.hibernate.readOnly", value = "true"))
@@ -283,6 +348,7 @@ public interface JobRepository extends JpaRepository<Job, UUID> {
             WHERE j.processingStartedAt IS NULL
               AND j.finishedAt IS NULL
               AND j.failedAt IS NULL
+              AND j.cancelledAt IS NULL
             """)
     long countPendingJobs();
 
@@ -292,6 +358,7 @@ public interface JobRepository extends JpaRepository<Job, UUID> {
             WHERE j.processingStartedAt IS NOT NULL
               AND j.finishedAt IS NULL
               AND j.failedAt IS NULL
+              AND j.cancelledAt IS NULL
             """)
     long countProcessingJobs();
 
@@ -301,21 +368,27 @@ public interface JobRepository extends JpaRepository<Job, UUID> {
     @Query("SELECT COUNT(j) FROM Job j WHERE j.failedAt IS NOT NULL")
     long countFailedJobs();
 
+    @Query("SELECT COUNT(j) FROM Job j WHERE j.cancelledAt IS NOT NULL")
+    long countCancelledJobs();
+
     @Query(
             """
             SELECT
               COALESCE(SUM(CASE
-                WHEN j.processingStartedAt IS NULL AND j.finishedAt IS NULL AND j.failedAt IS NULL
+                WHEN j.processingStartedAt IS NULL AND j.finishedAt IS NULL AND j.failedAt IS NULL AND j.cancelledAt IS NULL
                 THEN 1 ELSE 0 END), 0) AS pendingCount,
               COALESCE(SUM(CASE
-                WHEN j.processingStartedAt IS NOT NULL AND j.finishedAt IS NULL AND j.failedAt IS NULL
+                WHEN j.processingStartedAt IS NOT NULL AND j.finishedAt IS NULL AND j.failedAt IS NULL AND j.cancelledAt IS NULL
                 THEN 1 ELSE 0 END), 0) AS processingCount,
               COALESCE(SUM(CASE
                 WHEN j.finishedAt IS NOT NULL
                 THEN 1 ELSE 0 END), 0) AS completedCount,
               COALESCE(SUM(CASE
                 WHEN j.failedAt IS NOT NULL
-                THEN 1 ELSE 0 END), 0) AS failedCount
+                THEN 1 ELSE 0 END), 0) AS failedCount,
+              COALESCE(SUM(CASE
+                WHEN j.cancelledAt IS NOT NULL
+                THEN 1 ELSE 0 END), 0) AS cancelledCount
             FROM Job j
             """)
     LifecycleCounts countLifecycleCounts();
@@ -335,7 +408,9 @@ public interface JobRepository extends JpaRepository<Job, UUID> {
             SET j.processingStartedAt = COALESCE(j.processingStartedAt, :now),
                 j.finishedAt = :now,
                 j.failedAt = NULL,
+                j.cancelledAt = NULL,
                 j.errorMessage = NULL,
+                j.progressPercent = 100,
                 j.lockedAt = NULL,
                 j.lockedBy = NULL,
                 j.updatedAt = :now
@@ -343,10 +418,15 @@ public interface JobRepository extends JpaRepository<Job, UUID> {
               AND j.processingStartedAt IS NOT NULL
               AND j.finishedAt IS NULL
               AND j.failedAt IS NULL
-              AND j.lockedAt IS NOT NULL
+              AND j.cancelledAt IS NULL
+              AND j.lockedAt = :expectedLockedAt
               AND j.lockedBy = :lockedBy
             """)
-    int markCompleted(@Param("id") UUID id, @Param("now") OffsetDateTime now, @Param("lockedBy") String lockedBy);
+    int markCompleted(
+            @Param("id") UUID id,
+            @Param("expectedLockedAt") OffsetDateTime expectedLockedAt,
+            @Param("now") OffsetDateTime now,
+            @Param("lockedBy") String lockedBy);
 
     @Modifying
     @Query(
@@ -358,6 +438,7 @@ public interface JobRepository extends JpaRepository<Job, UUID> {
                 j.processingStartedAt = COALESCE(j.processingStartedAt, :now),
                 j.failedAt = :now,
                 j.finishedAt = NULL,
+                j.cancelledAt = NULL,
                 j.lockedAt = NULL,
                 j.lockedBy = NULL
             WHERE j.id = :id
@@ -365,7 +446,8 @@ public interface JobRepository extends JpaRepository<Job, UUID> {
               AND j.processingStartedAt IS NOT NULL
               AND j.finishedAt IS NULL
               AND j.failedAt IS NULL
-              AND j.lockedAt IS NOT NULL
+              AND j.cancelledAt IS NULL
+              AND j.lockedAt = :expectedLockedAt
               AND j.lockedBy = :lockedBy
             """)
     int markFailedTerminal(
@@ -374,6 +456,7 @@ public interface JobRepository extends JpaRepository<Job, UUID> {
             @Param("nextRetryCount") int nextRetryCount,
             @Param("errorMessage") String errorMessage,
             @Param("now") OffsetDateTime now,
+            @Param("expectedLockedAt") OffsetDateTime expectedLockedAt,
             @Param("lockedBy") String lockedBy);
 
     @Modifying
@@ -386,16 +469,20 @@ public interface JobRepository extends JpaRepository<Job, UUID> {
                 j.processingStartedAt = NULL,
                 j.finishedAt = NULL,
                 j.failedAt = NULL,
+                j.cancelledAt = NULL,
                 j.lockedAt = NULL,
                 j.lockedBy = NULL,
                 j.runAt = :nextRunAt,
-                j.priority = :nextPriority
+                j.priority = :nextPriority,
+                j.progressPercent = NULL,
+                j.progressMessage = NULL
             WHERE j.id = :id
               AND j.retryCount = :expectedRetryCount
               AND j.processingStartedAt IS NOT NULL
               AND j.finishedAt IS NULL
               AND j.failedAt IS NULL
-              AND j.lockedAt IS NOT NULL
+              AND j.cancelledAt IS NULL
+              AND j.lockedAt = :expectedLockedAt
               AND j.lockedBy = :lockedBy
             """)
     int markForRetry(
@@ -406,7 +493,72 @@ public interface JobRepository extends JpaRepository<Job, UUID> {
             @Param("now") OffsetDateTime now,
             @Param("nextRunAt") OffsetDateTime nextRunAt,
             @Param("nextPriority") int nextPriority,
+            @Param("expectedLockedAt") OffsetDateTime expectedLockedAt,
             @Param("lockedBy") String lockedBy);
+
+    @Modifying
+    @Query(
+            """
+            UPDATE Job j
+            SET j.retryCount = :nextRetryCount,
+                j.errorMessage = :errorMessage,
+                j.updatedAt = :now,
+                j.processingStartedAt = COALESCE(j.processingStartedAt, :now),
+                j.failedAt = :now,
+                j.finishedAt = NULL,
+                j.cancelledAt = NULL,
+                j.lockedAt = NULL,
+                j.lockedBy = NULL
+            WHERE j.id = :id
+              AND j.retryCount = :expectedRetryCount
+              AND j.processingStartedAt IS NOT NULL
+              AND j.finishedAt IS NULL
+              AND j.failedAt IS NULL
+              AND j.cancelledAt IS NULL
+              AND j.lockedAt = :expectedLockedAt
+            """)
+    int markTimedOutTerminal(
+            @Param("id") UUID id,
+            @Param("expectedRetryCount") int expectedRetryCount,
+            @Param("nextRetryCount") int nextRetryCount,
+            @Param("errorMessage") String errorMessage,
+            @Param("now") OffsetDateTime now,
+            @Param("expectedLockedAt") OffsetDateTime expectedLockedAt);
+
+    @Modifying
+    @Query(
+            """
+            UPDATE Job j
+            SET j.retryCount = :nextRetryCount,
+                j.errorMessage = :errorMessage,
+                j.updatedAt = :now,
+                j.processingStartedAt = NULL,
+                j.finishedAt = NULL,
+                j.failedAt = NULL,
+                j.cancelledAt = NULL,
+                j.lockedAt = NULL,
+                j.lockedBy = NULL,
+                j.runAt = :nextRunAt,
+                j.priority = :nextPriority,
+                j.progressPercent = NULL,
+                j.progressMessage = NULL
+            WHERE j.id = :id
+              AND j.retryCount = :expectedRetryCount
+              AND j.processingStartedAt IS NOT NULL
+              AND j.finishedAt IS NULL
+              AND j.failedAt IS NULL
+              AND j.cancelledAt IS NULL
+              AND j.lockedAt = :expectedLockedAt
+            """)
+    int markTimedOutForRetry(
+            @Param("id") UUID id,
+            @Param("expectedRetryCount") int expectedRetryCount,
+            @Param("nextRetryCount") int nextRetryCount,
+            @Param("errorMessage") String errorMessage,
+            @Param("now") OffsetDateTime now,
+            @Param("nextRunAt") OffsetDateTime nextRunAt,
+            @Param("nextPriority") int nextPriority,
+            @Param("expectedLockedAt") OffsetDateTime expectedLockedAt);
 
     @Modifying
     @Query(
@@ -419,6 +571,7 @@ public interface JobRepository extends JpaRepository<Job, UUID> {
               AND j.processingStartedAt IS NULL
               AND j.finishedAt IS NULL
               AND j.failedAt IS NULL
+              AND j.cancelledAt IS NULL
               AND j.runAt > :now
             """)
     int releaseGroupedPendingJobs(
@@ -432,14 +585,17 @@ public interface JobRepository extends JpaRepository<Job, UUID> {
             SET j.processingStartedAt = NULL,
                 j.finishedAt = NULL,
                 j.failedAt = NULL,
+                j.cancelledAt = NULL,
                 j.retryCount = 0,
                 j.errorMessage = NULL,
                 j.lockedAt = NULL,
                 j.lockedBy = NULL,
                 j.runAt = :now,
-                j.updatedAt = :now
+                j.updatedAt = :now,
+                j.progressPercent = NULL,
+                j.progressMessage = NULL
             WHERE j.id IN :ids
-              AND (j.finishedAt IS NOT NULL OR j.failedAt IS NOT NULL)
+              AND (j.finishedAt IS NOT NULL OR j.failedAt IS NOT NULL OR j.cancelledAt IS NOT NULL)
             """)
     int rerunTerminalJobsByIds(@Param("ids") List<UUID> ids, @Param("now") OffsetDateTime now);
 
@@ -451,12 +607,15 @@ public interface JobRepository extends JpaRepository<Job, UUID> {
             SET j.processingStartedAt = NULL,
                 j.finishedAt = NULL,
                 j.failedAt = NULL,
+                j.cancelledAt = NULL,
                 j.retryCount = 0,
                 j.errorMessage = NULL,
                 j.lockedAt = NULL,
                 j.lockedBy = NULL,
                 j.runAt = :now,
-                j.updatedAt = :now
+                j.updatedAt = :now,
+                j.progressPercent = NULL,
+                j.progressMessage = NULL
             WHERE j.failedAt IS NOT NULL
               AND j.failedAt >= :failedSince
               AND (:retriedOnly = false OR j.retryCount > 0)
@@ -477,5 +636,39 @@ public interface JobRepository extends JpaRepository<Job, UUID> {
             @Param("failedSince") OffsetDateTime failedSince,
             @Param("now") OffsetDateTime now);
 
-    boolean existsByTypeAndCronAndFinishedAtIsNullAndFailedAtIsNull(String type, String cron);
+    boolean existsByTypeAndCronAndFinishedAtIsNullAndFailedAtIsNullAndCancelledAtIsNull(String type, String cron);
+
+    Job findTopByTypeAndCronOrderByRunAtDesc(String type, String cron);
+
+    @Query(
+            """
+            SELECT COUNT(j) FROM Job j
+            WHERE j.type = :type
+              AND j.processingStartedAt >= :startedSince
+            """)
+    long countStartedSince(@Param("type") String type, @Param("startedSince") OffsetDateTime startedSince);
+
+    @Modifying
+    @Transactional
+    @Query(
+            """
+            UPDATE Job j
+            SET j.progressPercent = :progressPercent,
+                j.progressMessage = :progressMessage,
+                j.updatedAt = :now
+            WHERE j.id = :id
+              AND j.processingStartedAt IS NOT NULL
+              AND j.finishedAt IS NULL
+              AND j.failedAt IS NULL
+              AND j.cancelledAt IS NULL
+              AND j.lockedAt = :expectedLockedAt
+              AND j.lockedBy = :lockedBy
+            """)
+    int updateProgress(
+            @Param("id") UUID id,
+            @Param("expectedLockedAt") OffsetDateTime expectedLockedAt,
+            @Param("lockedBy") String lockedBy,
+            @Param("progressPercent") Integer progressPercent,
+            @Param("progressMessage") String progressMessage,
+            @Param("now") OffsetDateTime now);
 }

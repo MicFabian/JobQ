@@ -254,7 +254,12 @@ public class JobSchemaInitializer implements InitializingBean {
         if (tablePrefix.isEmpty()) {
             return sql;
         }
-        return sql.replace("jobq_jobs", jobsTable).replace("idx_jobq_jobs_", tablePrefix + "idx_jobq_jobs_");
+        return sql.replace("jobq_jobs", jobsTable)
+                .replace("jobq_queue_controls", resolveIdentifier("jobq_queue_controls"))
+                .replace("jobq_job_logs", resolveIdentifier("jobq_job_logs"))
+                .replace("jobq_worker_nodes", resolveIdentifier("jobq_worker_nodes"))
+                .replace("jobq_dashboard_audit_log", resolveIdentifier("jobq_dashboard_audit_log"))
+                .replace("idx_jobq_", tablePrefix + "idx_jobq_");
     }
 
     private boolean acquireLockIfPostgres(Connection connection) {

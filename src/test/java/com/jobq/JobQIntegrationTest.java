@@ -1924,8 +1924,9 @@ public class JobQIntegrationTest {
                         + "VALUES (?, 'TEST_JOB', '{\"message\":\"locked\"}', NOW(), NOW(), 'node-owner', 3, 0, 0, NOW(), NOW())",
                 jobId);
 
+        OffsetDateTime lockedAt = jobRepository.findById(jobId).orElseThrow().getLockedAt();
         int updated = transactionTemplate.execute(
-                status -> jobRepository.markCompleted(jobId, OffsetDateTime.now(), "node-other"));
+                status -> jobRepository.markCompleted(jobId, lockedAt, OffsetDateTime.now(), "node-other"));
         assertNotNull(updated);
         assertEquals(0, updated);
 
@@ -1944,8 +1945,9 @@ public class JobQIntegrationTest {
 
         OffsetDateTime now = OffsetDateTime.now();
         OffsetDateTime nextRunAt = now.plusSeconds(30);
-        int updated = transactionTemplate.execute(
-                status -> jobRepository.markForRetry(jobId, 1, 3, "new-error", now, nextRunAt, 4, "node-owner"));
+        OffsetDateTime lockedAt = jobRepository.findById(jobId).orElseThrow().getLockedAt();
+        int updated = transactionTemplate.execute(status ->
+                jobRepository.markForRetry(jobId, 1, 3, "new-error", now, nextRunAt, 4, lockedAt, "node-owner"));
         assertNotNull(updated);
         assertEquals(0, updated);
 
@@ -1965,8 +1967,9 @@ public class JobQIntegrationTest {
 
         OffsetDateTime now = OffsetDateTime.now();
         OffsetDateTime nextRunAt = now.plusSeconds(30);
-        int updated = transactionTemplate.execute(
-                status -> jobRepository.markForRetry(jobId, 1, 2, "new-error", now, nextRunAt, 4, "node-other"));
+        OffsetDateTime lockedAt = jobRepository.findById(jobId).orElseThrow().getLockedAt();
+        int updated = transactionTemplate.execute(status ->
+                jobRepository.markForRetry(jobId, 1, 2, "new-error", now, nextRunAt, 4, lockedAt, "node-other"));
         assertNotNull(updated);
         assertEquals(0, updated);
 
@@ -1986,8 +1989,9 @@ public class JobQIntegrationTest {
                 jobId);
 
         OffsetDateTime now = OffsetDateTime.now();
+        OffsetDateTime lockedAt = jobRepository.findById(jobId).orElseThrow().getLockedAt();
         int updated = transactionTemplate.execute(
-                status -> jobRepository.markFailedTerminal(jobId, 1, 2, "terminal-error", now, "node-other"));
+                status -> jobRepository.markFailedTerminal(jobId, 1, 2, "terminal-error", now, lockedAt, "node-other"));
         assertNotNull(updated);
         assertEquals(0, updated);
 

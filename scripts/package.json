@@ -1,0 +1,12 @@
+{
+  "name": "jobq-dashboard-smoke",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "install:browsers": "playwright install chromium",
+    "smoke:browser": "node ./dashboard-smoke-browser.mjs"
+  },
+  "devDependencies": {
+    "playwright": "1.59.1"
+  }
+}

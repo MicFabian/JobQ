@@ -45,8 +45,17 @@ public class Job {
     @Column(name = "failed_at")
     private OffsetDateTime failedAt;
 
+    @Column(name = "cancelled_at")
+    private OffsetDateTime cancelledAt;
+
     @Column(name = "error_message", columnDefinition = "text")
     private String errorMessage;
+
+    @Column(name = "progress_percent")
+    private Integer progressPercent;
+
+    @Column(name = "progress_message", columnDefinition = "text")
+    private String progressMessage;
 
     @Column(name = "retry_count")
     private int retryCount = 0;
@@ -131,6 +140,9 @@ public class Job {
         if (failedAt != null) {
             return "FAILED";
         }
+        if (cancelledAt != null) {
+            return "CANCELLED";
+        }
         if (processingStartedAt != null) {
             return "PROCESSING";
         }
@@ -144,6 +156,7 @@ public class Job {
                 this.processingStartedAt = null;
                 this.finishedAt = null;
                 this.failedAt = null;
+                this.cancelledAt = null;
             }
             case "PROCESSING" -> {
                 if (this.processingStartedAt == null) {
@@ -151,14 +164,22 @@ public class Job {
                 }
                 this.finishedAt = null;
                 this.failedAt = null;
+                this.cancelledAt = null;
             }
             case "COMPLETED" -> {
                 this.finishedAt = now;
                 this.failedAt = null;
+                this.cancelledAt = null;
             }
             case "FAILED" -> {
                 this.failedAt = now;
                 this.finishedAt = null;
+                this.cancelledAt = null;
+            }
+            case "CANCELLED" -> {
+                this.cancelledAt = now;
+                this.finishedAt = null;
+                this.failedAt = null;
             }
             default -> throw new IllegalArgumentException("Unsupported status: " + status);
         }
@@ -220,12 +241,36 @@ public class Job {
         this.failedAt = failedAt;
     }
 
+    public OffsetDateTime getCancelledAt() {
+        return cancelledAt;
+    }
+
+    public void setCancelledAt(OffsetDateTime cancelledAt) {
+        this.cancelledAt = cancelledAt;
+    }
+
     public String getErrorMessage() {
         return errorMessage;
     }
 
     public void setErrorMessage(String errorMessage) {
         this.errorMessage = errorMessage;
+    }
+
+    public Integer getProgressPercent() {
+        return progressPercent;
+    }
+
+    public void setProgressPercent(Integer progressPercent) {
+        this.progressPercent = progressPercent;
+    }
+
+    public String getProgressMessage() {
+        return progressMessage;
+    }
+
+    public void setProgressMessage(String progressMessage) {
+        this.progressMessage = progressMessage;
     }
 
     public int getRetryCount() {

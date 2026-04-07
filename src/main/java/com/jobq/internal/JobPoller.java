@@ -6,12 +6,16 @@ import com.fasterxml.jackson.databind.ObjectReader;
 import com.jobq.Job;
 import com.jobq.JobLifecycle;
 import com.jobq.JobRepository;
+import com.jobq.JobRuntime;
 import com.jobq.JobWorker;
+import com.jobq.dashboard.JobDashboardEventBus;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
+import java.sql.ResultSet;
+import java.sql.SQLException;
 import java.time.OffsetDateTime;
 import java.util.Arrays;
 import java.util.HashMap;
@@ -19,19 +23,31 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.regex.Pattern;
+import javax.sql.DataSource;
+import org.postgresql.PGConnection;
+import org.postgresql.PGNotification;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ListableBeanFactory;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.context.event.ContextClosedEvent;
+import org.springframework.context.event.EventListener;
 import org.springframework.core.ResolvableType;
 import org.springframework.core.annotation.AnnotationUtils;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Slice;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.scheduling.support.CronExpression;
 import org.springframework.stereotype.Component;
@@ -48,6 +64,8 @@ import org.springframework.util.ReflectionUtils;
 public class JobPoller {
 
     private static final Logger log = LoggerFactory.getLogger(JobPoller.class);
+    private static final Pattern SAFE_TABLE_NAME = Pattern.compile("[A-Za-z0-9_]+");
+    private static final Pattern SAFE_CHANNEL = Pattern.compile("[A-Za-z0-9_]+");
 
     private final JobRepository jobRepository;
     private final List<JobWorker<?>> workers;
@@ -55,14 +73,33 @@ public class JobPoller {
     private final ObjectMapper objectMapper;
     private final TransactionTemplate transactionTemplate;
     private final com.jobq.config.JobQProperties properties;
+    private final DataSource dataSource;
+    private final JdbcTemplate jdbcTemplate;
+    private final JobSignalPublisher jobSignalPublisher;
+    private final JobOperationsService jobOperationsService;
+    private final JobRuntime jobRuntime;
+    private final JobDashboardEventBus dashboardEventBus;
     private final int workerCount;
     private final int processingQueueCapacity;
     private final ThreadPoolExecutor processingExecutor;
     private final ThreadPoolExecutor pollingExecutor;
+    private final String jobTableName;
+    private final String claimNextJobsSql;
+    private final String notifyChannel;
+    private final int notifyListenTimeoutMs;
 
     private final String nodeId = "node-" + UUID.randomUUID().toString();
+    private final OffsetDateTime nodeStartedAt = OffsetDateTime.now();
+    private final CountDownLatch notificationListenerReady = new CountDownLatch(1);
+    private final AtomicBoolean notificationListenerRunning = new AtomicBoolean(false);
+    private final AtomicBoolean shuttingDown = new AtomicBoolean(false);
+    private final Map<String, AtomicInteger> inFlightByType = new ConcurrentHashMap<>();
+    private final Map<String, Long> lastDispatchAtByType = new ConcurrentHashMap<>();
+    private volatile Map<String, JobOperationsService.QueueRuntimeState> queueRuntimeStates = Map.of();
     private Map<String, RegisteredJob> jobMap = Map.of();
     private Map<String, AtomicBoolean> pollInProgress = Map.of();
+    private Thread notificationListenerThread;
+    private Runnable localSignalSubscription = () -> {};
 
     public JobPoller(
             JobRepository jobRepository,
@@ -70,14 +107,32 @@ public class JobPoller {
             ListableBeanFactory beanFactory,
             ObjectMapper objectMapper,
             TransactionTemplate transactionTemplate,
-            com.jobq.config.JobQProperties properties) {
+            com.jobq.config.JobQProperties properties,
+            DataSource dataSource,
+            JdbcTemplate jdbcTemplate,
+            JobSignalPublisher jobSignalPublisher,
+            JobOperationsService jobOperationsService,
+            JobRuntime jobRuntime,
+            ObjectProvider<JobDashboardEventBus> dashboardEventBusProvider) {
         this.jobRepository = jobRepository;
         this.workers = workers;
         this.beanFactory = beanFactory;
         this.objectMapper = objectMapper;
         this.transactionTemplate = transactionTemplate;
         this.properties = properties;
+        this.dataSource = dataSource;
+        this.jdbcTemplate = jdbcTemplate;
+        this.jobSignalPublisher = jobSignalPublisher;
+        this.jobOperationsService = jobOperationsService;
+        this.jobRuntime = jobRuntime;
+        this.dashboardEventBus = dashboardEventBusProvider.getIfAvailable();
         this.workerCount = Math.max(1, properties.getBackgroundJobServer().getWorkerCount());
+        this.jobTableName = resolveJobTableName(properties.getDatabase().getTablePrefix());
+        this.claimNextJobsSql = buildClaimNextJobsSql(jobTableName);
+        this.notifyChannel =
+                normalizeNotifyChannel(properties.getBackgroundJobServer().getNotifyChannel());
+        this.notifyListenTimeoutMs =
+                Math.max(100, properties.getBackgroundJobServer().getNotifyListenTimeoutMs());
 
         this.processingQueueCapacity = Math.max(32, workerCount * 8);
         this.processingExecutor = new ThreadPoolExecutor(
@@ -122,97 +177,126 @@ public class JobPoller {
             pollState.put(jobType, new AtomicBoolean(false));
         }
         this.pollInProgress = pollState;
+        this.queueRuntimeStates = jobOperationsService.loadQueueRuntimeStates();
 
         log.info("Job Poller initialized on {} with {} registered jobs: {}", nodeId, jobMap.size(), jobMap.keySet());
+        this.localSignalSubscription = jobSignalPublisher.registerLocalListener(this::handleNotificationPayload);
+        startNotificationListenerIfConfigured();
+        publishNodeHeartbeat();
     }
 
     @Scheduled(fixedDelayString = "${jobq.background-job-server.poll-interval-in-seconds:15}000")
     public void poll() {
-        if (jobMap.isEmpty()) {
+        if (shuttingDown.get() || jobMap.isEmpty()) {
             return;
         }
+        refreshQueueRuntimeStates();
         for (String jobType : jobMap.keySet()) {
-            AtomicBoolean inProgress = pollInProgress.get(jobType);
-            if (inProgress == null || !inProgress.compareAndSet(false, true)) {
-                continue;
-            }
-
-            try {
-                pollingExecutor.execute(() -> {
-                    try {
-                        pollForType(jobType);
-                    } finally {
-                        inProgress.set(false);
-                    }
-                });
-            } catch (RejectedExecutionException saturatedPollingQueue) {
-                inProgress.set(false);
-                log.debug("Skipping poll dispatch for type {} because polling queue is saturated", jobType);
-            }
+            dispatchPoll(jobType);
         }
     }
 
     private void pollForType(String jobType) {
+        if (shuttingDown.get()) {
+            return;
+        }
         RegisteredJob registration = jobMap.get(jobType);
         if (registration == null) {
             return;
         }
 
-        int remainingSlots = availableProcessingSlots();
+        JobOperationsService.QueueRuntimeState queueState =
+                queueRuntimeStates.getOrDefault(jobType, JobOperationsService.QueueRuntimeState.defaults(jobType));
+        if (queueState.paused() || isDispatchCoolingDown(jobType, queueState)) {
+            return;
+        }
+
+        int remainingSlots = Math.min(availableProcessingSlots(), availableProcessingSlotsForType(jobType, queueState));
         while (remainingSlots > 0) {
-            // Acquire a bounded batch based on currently available processing capacity.
             int batchSize = Math.min(workerCount, remainingSlots);
-            List<Job> jobs = transactionTemplate.execute(status -> {
-                List<Job> nextJobs = jobRepository.findNextJobsForUpdate(jobType, PageRequest.of(0, batchSize));
-                if (nextJobs.isEmpty()) {
-                    return List.<Job>of();
-                }
-                OffsetDateTime lockTime = OffsetDateTime.now();
-                if (shouldReleaseGroupedJobsWhenFirstDue(registration)) {
-                    List<String> dueGroupIds = extractActiveGroupIds(nextJobs);
-                    if (!dueGroupIds.isEmpty()) {
-                        int released = jobRepository.releaseGroupedPendingJobs(jobType, dueGroupIds, lockTime);
-                        if (released > 0) {
-                            nextJobs = jobRepository.findNextJobsForUpdate(jobType, PageRequest.of(0, batchSize));
-                            if (nextJobs.isEmpty()) {
-                                return List.<Job>of();
-                            }
-                        }
-                    }
-                }
-                for (Job j : nextJobs) {
-                    j.setProcessingStartedAt(lockTime);
-                    j.setFinishedAt(null);
-                    j.setFailedAt(null);
-                    j.setLockedAt(lockTime);
-                    j.setLockedBy(nodeId);
-                    j.setUpdatedAt(lockTime);
-                }
-                jobRepository.saveAll(nextJobs);
-                return nextJobs;
-            });
+            batchSize = Math.min(batchSize, rateLimitRemaining(jobType, queueState));
+            if (batchSize <= 0) {
+                return;
+            }
+            final int claimBatchSize = batchSize;
+            List<Job> jobs =
+                    transactionTemplate.execute(status -> claimNextJobs(jobType, registration, claimBatchSize));
 
             if (jobs == null || jobs.isEmpty()) {
                 return;
             }
 
+            rememberDispatch(jobType);
             for (Job job : jobs) {
+                AtomicInteger inFlightCounter = inFlightByType.computeIfAbsent(jobType, ignored -> new AtomicInteger());
+                int inFlightAfterIncrement = inFlightCounter.incrementAndGet();
                 try {
-                    processingExecutor.execute(() -> processJob(job, registration));
+                    processingExecutor.execute(() -> {
+                        try {
+                            processJob(job, registration);
+                        } finally {
+                            inFlightCounter.decrementAndGet();
+                        }
+                    });
                 } catch (RejectedExecutionException saturatedProcessingQueue) {
+                    inFlightCounter.decrementAndGet();
                     log.debug(
                             "Skipping job {} dispatch for type {} because processing queue is saturated",
                             job.getId(),
                             jobType);
                     return;
                 }
+                if (queueState.maxConcurrency() != null && inFlightAfterIncrement >= queueState.maxConcurrency()) {
+                    break;
+                }
             }
 
-            remainingSlots = availableProcessingSlots();
+            remainingSlots = Math.min(availableProcessingSlots(), availableProcessingSlotsForType(jobType, queueState));
             if (jobs.size() < batchSize) {
                 return;
             }
         }
+    }
+
+    @Scheduled(fixedDelayString = "${jobq.background-job-server.execution-timeout-check-interval-in-seconds:30}000")
+    public void reclaimTimedOutJobs() {
+        if (shuttingDown.get() || jobMap.isEmpty()) {
+            return;
+        }
+        for (Map.Entry<String, RegisteredJob> entry : jobMap.entrySet()) {
+            JobOperationsService.QueueRuntimeState queueState = queueRuntimeStates.getOrDefault(
+                    entry.getKey(), JobOperationsService.QueueRuntimeState.defaults(entry.getKey()));
+            if (queueState.paused()) {
+                continue;
+            }
+            long maxExecutionMs = maxExecutionMs(entry.getValue());
+            if (maxExecutionMs <= 0) {
+                continue;
+            }
+
+            OffsetDateTime lockedBefore = OffsetDateTime.now().minusNanos(maxExecutionMs * 1_000_000);
+            PageRequest pageRequest = PageRequest.of(0, Math.max(1, workerCount));
+            Slice<Job> timedOutJobs =
+                    jobRepository.findTimedOutProcessingJobs(entry.getKey(), lockedBefore, pageRequest);
+            for (Job timedOutJob : timedOutJobs.getContent()) {
+                handleTimeout(timedOutJob, entry.getValue(), maxExecutionMs);
+            }
+        }
+    }
+
+    @Scheduled(fixedDelayString = "${jobq.background-job-server.node-heartbeat-interval-in-seconds:10}000")
+    public void publishNodeHeartbeat() {
+        if (jobMap.isEmpty()) {
+            return;
+        }
+        jobOperationsService.heartbeatNode(
+                nodeId,
+                nodeStartedAt,
+                OffsetDateTime.now(),
+                workerCount,
+                processingExecutor.getActiveCount(),
+                jobMap.keySet(),
+                properties.getBackgroundJobServer().isNotifyEnabled());
     }
 
     private boolean shouldReleaseGroupedJobsWhenFirstDue(RegisteredJob registration) {
@@ -222,12 +306,127 @@ public class JobPoller {
                         == com.jobq.annotation.Job.GroupDelayPolicy.KEEP_EXISTING_DELAY_RUN_ALL_ON_FIRST_DUE;
     }
 
-    private List<String> extractActiveGroupIds(List<Job> jobs) {
-        return jobs.stream()
-                .map(Job::getGroupId)
-                .filter(groupId -> groupId != null && !groupId.isBlank())
-                .distinct()
-                .toList();
+    private void dispatchPoll(String jobType) {
+        if (shuttingDown.get()) {
+            return;
+        }
+        JobOperationsService.QueueRuntimeState queueState =
+                queueRuntimeStates.getOrDefault(jobType, JobOperationsService.QueueRuntimeState.defaults(jobType));
+        if (queueState.paused()) {
+            return;
+        }
+        AtomicBoolean inProgress = pollInProgress.get(jobType);
+        if (inProgress == null || !inProgress.compareAndSet(false, true)) {
+            return;
+        }
+
+        try {
+            pollingExecutor.execute(() -> {
+                try {
+                    pollForType(jobType);
+                } finally {
+                    inProgress.set(false);
+                }
+            });
+        } catch (RejectedExecutionException saturatedPollingQueue) {
+            inProgress.set(false);
+            log.debug("Skipping poll dispatch for type {} because polling queue is saturated", jobType);
+        }
+    }
+
+    private List<Job> claimNextJobs(String jobType, RegisteredJob registration, int batchSize) {
+        if (shuttingDown.get()) {
+            return List.of();
+        }
+        OffsetDateTime lockTime = OffsetDateTime.now();
+        if (shouldReleaseGroupedJobsWhenFirstDue(registration)) {
+            List<String> dueGroupIds = jobRepository.findDueActiveGroupIds(jobType, PageRequest.of(0, batchSize));
+            if (!dueGroupIds.isEmpty()) {
+                jobRepository.releaseGroupedPendingJobs(jobType, dueGroupIds, lockTime);
+            }
+        }
+
+        return jdbcTemplate.query(
+                claimNextJobsSql,
+                preparedStatement -> {
+                    preparedStatement.setString(1, jobType);
+                    preparedStatement.setObject(2, lockTime);
+                    preparedStatement.setInt(3, batchSize);
+                    preparedStatement.setObject(4, lockTime);
+                    preparedStatement.setObject(5, lockTime);
+                    preparedStatement.setString(6, nodeId);
+                    preparedStatement.setObject(7, lockTime);
+                },
+                (resultSet, rowNum) -> mapClaimedJob(resultSet));
+    }
+
+    private Job mapClaimedJob(ResultSet resultSet) throws SQLException {
+        Job job = new Job();
+        job.setId(resultSet.getObject("id", UUID.class));
+        job.setType(resultSet.getString("type"));
+        String payload = resultSet.getString("payload");
+        if (payload != null) {
+            try {
+                job.setPayload(objectMapper.readTree(payload));
+            } catch (Exception e) {
+                throw new IllegalStateException("Failed to deserialize claimed payload for job " + job.getId(), e);
+            }
+        }
+        job.setCreatedAt(resultSet.getObject("created_at", OffsetDateTime.class));
+        job.setUpdatedAt(resultSet.getObject("updated_at", OffsetDateTime.class));
+        job.setLockedAt(resultSet.getObject("locked_at", OffsetDateTime.class));
+        job.setLockedBy(resultSet.getString("locked_by"));
+        job.setProcessingStartedAt(resultSet.getObject("processing_started_at", OffsetDateTime.class));
+        job.setFinishedAt(resultSet.getObject("finished_at", OffsetDateTime.class));
+        job.setFailedAt(resultSet.getObject("failed_at", OffsetDateTime.class));
+        job.setErrorMessage(resultSet.getString("error_message"));
+        job.setRetryCount(resultSet.getInt("retry_count"));
+        job.setMaxRetries(resultSet.getInt("max_retries"));
+        job.setPriority(resultSet.getInt("priority"));
+        job.setRunAt(resultSet.getObject("run_at", OffsetDateTime.class));
+        job.setGroupId(resultSet.getString("group_id"));
+        job.setReplaceKey(resultSet.getString("replace_key"));
+        job.setCron(resultSet.getString("cron"));
+        return job;
+    }
+
+    private void refreshQueueRuntimeStates() {
+        this.queueRuntimeStates = jobOperationsService.loadQueueRuntimeStates();
+    }
+
+    private int availableProcessingSlotsForType(
+            String jobType, JobOperationsService.QueueRuntimeState queueRuntimeState) {
+        Integer maxConcurrency = queueRuntimeState.maxConcurrency();
+        if (maxConcurrency == null) {
+            return workerCount;
+        }
+        int inFlight = inFlightByType
+                .computeIfAbsent(jobType, ignored -> new AtomicInteger())
+                .get();
+        return Math.max(0, maxConcurrency - inFlight);
+    }
+
+    private int rateLimitRemaining(String jobType, JobOperationsService.QueueRuntimeState queueRuntimeState) {
+        Integer rateLimitPerMinute = queueRuntimeState.rateLimitPerMinute();
+        if (rateLimitPerMinute == null) {
+            return Integer.MAX_VALUE;
+        }
+        long startedInLastMinute =
+                jobRepository.countStartedSince(jobType, OffsetDateTime.now().minusMinutes(1));
+        return Math.max(0, rateLimitPerMinute - (int) startedInLastMinute);
+    }
+
+    private boolean isDispatchCoolingDown(String jobType, JobOperationsService.QueueRuntimeState queueRuntimeState) {
+        Integer dispatchCooldownMs = queueRuntimeState.dispatchCooldownMs();
+        if (dispatchCooldownMs == null || dispatchCooldownMs <= 0) {
+            return false;
+        }
+        long lastDispatchAt = lastDispatchAtByType.getOrDefault(jobType, 0L);
+        return System.currentTimeMillis() - lastDispatchAt < dispatchCooldownMs;
+    }
+
+    private void rememberDispatch(String jobType) {
+        lastDispatchAtByType.put(jobType, System.currentTimeMillis());
     }
 
     private int availableProcessingSlots() {
@@ -236,33 +435,198 @@ public class JobPoller {
         return Math.max(0, processingQueueCapacity - inFlight);
     }
 
+    private String resolveJobTableName(String tablePrefix) {
+        String prefix = tablePrefix == null ? "" : tablePrefix.trim();
+        String tableName = prefix + "jobq_jobs";
+        if (!SAFE_TABLE_NAME.matcher(tableName).matches()) {
+            throw new IllegalArgumentException("Unsupported job table name: " + tableName);
+        }
+        return tableName;
+    }
+
+    private String buildClaimNextJobsSql(String tableName) {
+        return """
+                WITH candidates AS (
+                    SELECT id
+                    FROM %1$s
+                    WHERE type = ?
+                      AND processing_started_at IS NULL
+                      AND finished_at IS NULL
+                      AND failed_at IS NULL
+                      AND cancelled_at IS NULL
+                      AND run_at <= ?
+                    ORDER BY priority DESC, created_at ASC
+                    FOR UPDATE SKIP LOCKED
+                    LIMIT ?
+                )
+                UPDATE %1$s j
+                SET processing_started_at = ?,
+                    finished_at = NULL,
+                    failed_at = NULL,
+                    locked_at = ?,
+                    locked_by = ?,
+                    updated_at = ?
+                FROM candidates c
+                WHERE j.id = c.id
+                RETURNING
+                    j.id,
+                    j.type,
+                    j.payload,
+                    j.created_at,
+                    j.updated_at,
+                    j.locked_at,
+                    j.locked_by,
+                    j.processing_started_at,
+                    j.finished_at,
+                    j.failed_at,
+                    j.error_message,
+                    j.retry_count,
+                    j.max_retries,
+                    j.priority,
+                    j.run_at,
+                    j.group_id,
+                    j.replace_key,
+                    j.cron
+                """
+                .formatted(tableName);
+    }
+
+    private String normalizeNotifyChannel(String configuredChannel) {
+        String candidate = configuredChannel == null ? "" : configuredChannel.trim();
+        String normalized = candidate.isEmpty() ? "jobq_jobs_available" : candidate;
+        if (!SAFE_CHANNEL.matcher(normalized).matches()) {
+            throw new IllegalArgumentException("Unsupported PostgreSQL notify channel name: " + normalized);
+        }
+        return normalized;
+    }
+
+    private void startNotificationListenerIfConfigured() {
+        if (!properties.getBackgroundJobServer().isNotifyEnabled()) {
+            return;
+        }
+        if (!notificationListenerRunning.compareAndSet(false, true)) {
+            return;
+        }
+        notificationListenerThread = new Thread(this::runNotificationListener, "jobq-pg-listener-" + nodeId);
+        notificationListenerThread.setDaemon(true);
+        notificationListenerThread.start();
+        try {
+            if (!notificationListenerReady.await(5, TimeUnit.SECONDS)) {
+                log.warn("JobQ PostgreSQL listener did not become ready within startup timeout");
+            }
+        } catch (InterruptedException interruptedException) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    private void runNotificationListener() {
+        while (notificationListenerRunning.get()) {
+            try (java.sql.Connection connection = dataSource.getConnection();
+                    java.sql.Statement statement = connection.createStatement()) {
+                connection.setAutoCommit(true);
+                PGConnection pgConnection = connection.unwrap(PGConnection.class);
+                statement.execute("LISTEN " + notifyChannel);
+                notificationListenerReady.countDown();
+                log.info("JobQ PostgreSQL listener active on channel {}", notifyChannel);
+
+                while (notificationListenerRunning.get()) {
+                    PGNotification[] notifications = pgConnection.getNotifications(notifyListenTimeoutMs);
+                    if (notifications == null || notifications.length == 0) {
+                        continue;
+                    }
+                    for (PGNotification notification : notifications) {
+                        handleNotificationPayload(notification.getParameter());
+                    }
+                }
+            } catch (Exception e) {
+                notificationListenerReady.countDown();
+                if (shuttingDown.get()
+                        || !notificationListenerRunning.get()
+                        || Thread.currentThread().isInterrupted()) {
+                    log.debug("JobQ PostgreSQL listener stopped during shutdown");
+                    break;
+                }
+                if (notificationListenerRunning.get()) {
+                    log.warn("JobQ PostgreSQL listener stopped unexpectedly. Retrying.", e);
+                    sleepQuietly(1_000);
+                }
+            }
+        }
+    }
+
+    private void handleNotificationPayload(String payload) {
+        if (payload == null || payload.isBlank() || "*".equals(payload)) {
+            poll();
+            return;
+        }
+        if (jobMap.containsKey(payload)) {
+            dispatchPoll(payload);
+            return;
+        }
+        poll();
+    }
+
+    private void sleepQuietly(long millis) {
+        try {
+            Thread.sleep(millis);
+        } catch (InterruptedException interruptedException) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    private long maxExecutionMs(RegisteredJob registration) {
+        com.jobq.annotation.Job annotation = registration.annotation();
+        if (annotation == null) {
+            return 0L;
+        }
+        return Math.max(0L, annotation.maxExecutionMs());
+    }
+
     private void processJob(Job job, RegisteredJob registration) {
+        if (shuttingDown.get()) {
+            return;
+        }
         log.debug("Locked job {} of type {} for processing", job.getId(), job.getType());
 
         Object payload = null;
-        try {
-            payload = registration.payloadDeserializer().deserialize(job.getPayload());
-            registration.invoker().invoke(job.getId(), payload);
-            markCompleted(job, registration);
-            invokeOnSuccessSafely(registration, job.getId(), payload);
-            log.debug("Successfully completed job {} of type {}", job.getId(), job.getType());
-        } catch (Exception e) {
-            invokeOnErrorSafely(registration, job.getId(), payload, e);
-            if (isExpectedException(registration, e)) {
-                log.debug(
-                        "Job {} of type {} threw expected exception {}. Marking as COMPLETED.",
-                        job.getId(),
-                        job.getType(),
-                        e.getClass().getName());
-                markCompleted(job, registration);
-                invokeOnSuccessSafely(registration, job.getId(), payload);
-                return;
-            }
+        try (JobRuntime.JobExecutionHandle ignored =
+                jobRuntime.open(job.getId(), job.getType(), job.getLockedAt(), nodeId)) {
+            try {
+                payload = registration.payloadDeserializer().deserialize(job.getPayload());
+                registration.invoker().invoke(job.getId(), payload);
+                if (shuttingDown.get()) {
+                    return;
+                }
+                if (markCompleted(job, registration)) {
+                    invokeOnSuccessSafely(registration, job.getId(), payload);
+                    log.debug("Successfully completed job {} of type {}", job.getId(), job.getType());
+                } else {
+                    log.debug(
+                            "Skipped completion callbacks for job {} because state no longer allows completion",
+                            job.getId());
+                }
+            } catch (Exception e) {
+                invokeOnErrorSafely(registration, job.getId(), payload, e);
+                if (isExpectedException(registration, e)) {
+                    log.debug(
+                            "Job {} of type {} threw expected exception {}. Marking as COMPLETED.",
+                            job.getId(),
+                            job.getType(),
+                            e.getClass().getName());
+                    if (markCompleted(job, registration)) {
+                        invokeOnSuccessSafely(registration, job.getId(), payload);
+                    }
+                    return;
+                }
 
-            log.error("Failed to process job {} of type {}", job.getId(), job.getType(), e);
-            handleFailure(job, e, registration);
-        } finally {
-            invokeAfterSafely(registration, job.getId(), payload);
+                if (shuttingDown.get()) {
+                    return;
+                }
+                log.error("Failed to process job {} of type {}", job.getId(), job.getType(), e);
+                handleFailure(job, e, registration);
+            } finally {
+                invokeAfterSafely(registration, job.getId(), payload);
+            }
         }
     }
 
@@ -875,23 +1239,25 @@ public class JobPoller {
         return AnnotationUtils.findAnnotation(targetClass, com.jobq.annotation.Job.class);
     }
 
-    private void markCompleted(Job jobSnapshot, RegisteredJob registration) {
+    private boolean markCompleted(Job jobSnapshot, RegisteredJob registration) {
         OffsetDateTime now = OffsetDateTime.now();
-        Integer updated =
-                transactionTemplate.execute(status -> jobRepository.markCompleted(jobSnapshot.getId(), now, nodeId));
+        Integer updated = transactionTemplate.execute(
+                status -> jobRepository.markCompleted(jobSnapshot.getId(), jobSnapshot.getLockedAt(), now, nodeId));
         if (toAffectedRows(updated) > 0) {
             scheduleNextRecurringExecutionIfNeeded(jobSnapshot, registration);
-            return;
+            publishDashboardRefresh(jobSnapshot.getId());
+            return true;
         }
 
         log.debug("Falling back to entity completion update for job {}", jobSnapshot.getId());
-        transactionTemplate.executeWithoutResult(
-                status -> jobRepository.findById(jobSnapshot.getId()).ifPresent(job -> {
-                    if (!isMutableProcessingJob(job)) {
+        Boolean fallbackCompleted = transactionTemplate.execute(status -> jobRepository
+                .findById(jobSnapshot.getId())
+                .map(job -> {
+                    if (!isMutableProcessingJob(job, jobSnapshot.getLockedAt())) {
                         log.debug(
                                 "Skipping completion fallback for job {} due lifecycle/lock mismatch",
                                 jobSnapshot.getId());
-                        return;
+                        return false;
                     }
                     if (job.getProcessingStartedAt() == null) {
                         job.setProcessingStartedAt(now);
@@ -902,9 +1268,14 @@ public class JobPoller {
                     job.setLockedAt(null);
                     job.setLockedBy(null);
                     job.setUpdatedAt(now);
+                    job.setProgressPercent(100);
                     jobRepository.save(job);
                     scheduleNextRecurringExecutionIfNeeded(job, registration);
-                }));
+                    publishDashboardRefresh(jobSnapshot.getId());
+                    return true;
+                })
+                .orElse(false));
+        return Boolean.TRUE.equals(fallbackCompleted);
     }
 
     private void scheduleNextRecurringExecutionIfNeeded(Job job, RegisteredJob registration) {
@@ -916,7 +1287,7 @@ public class JobPoller {
         }
 
         try {
-            OffsetDateTime nextRun = registration.recurringCronExpression().next(OffsetDateTime.now());
+            OffsetDateTime nextRun = resolveNextRecurringRunAt(job, registration, OffsetDateTime.now());
             if (nextRun == null) {
                 return;
             }
@@ -949,6 +1320,24 @@ public class JobPoller {
         }
     }
 
+    private OffsetDateTime resolveNextRecurringRunAt(Job job, RegisteredJob registration, OffsetDateTime now) {
+        com.jobq.annotation.Job annotation = registration.annotation();
+        if (annotation == null) {
+            return registration.recurringCronExpression().next(now);
+        }
+
+        OffsetDateTime anchor = job.getRunAt() != null ? job.getRunAt() : now;
+        OffsetDateTime scheduledNext = registration.recurringCronExpression().next(anchor);
+        if (scheduledNext == null) {
+            return null;
+        }
+        return switch (annotation.cronMisfirePolicy()) {
+            case SKIP -> registration.recurringCronExpression().next(now);
+            case FIRE_ONCE -> scheduledNext.isBefore(now) ? now : scheduledNext;
+            case CATCH_UP -> scheduledNext;
+        };
+    }
+
     private String recurringReplaceKey(String cron) {
         return "__jobq_recurring__:" + cron;
     }
@@ -961,8 +1350,15 @@ public class JobPoller {
 
         if (nextRetryCount > jobSnapshot.getMaxRetries()) {
             Integer updated = transactionTemplate.execute(status -> jobRepository.markFailedTerminal(
-                    jobSnapshot.getId(), currentRetryCount, nextRetryCount, errorMessage, now, nodeId));
+                    jobSnapshot.getId(),
+                    currentRetryCount,
+                    nextRetryCount,
+                    errorMessage,
+                    now,
+                    jobSnapshot.getLockedAt(),
+                    nodeId));
             if (toAffectedRows(updated) > 0) {
+                publishDashboardRefresh(jobSnapshot.getId());
                 return;
             }
         } else {
@@ -975,20 +1371,23 @@ public class JobPoller {
                     now,
                     retryDecision.nextRunAt(),
                     retryDecision.nextPriority(),
+                    jobSnapshot.getLockedAt(),
                     nodeId));
             if (toAffectedRows(updated) > 0) {
+                publishDashboardRefresh(jobSnapshot.getId());
                 return;
             }
         }
 
         log.debug("Falling back to entity failure update for job {}", jobSnapshot.getId());
-        fallbackFailureUpdate(jobSnapshot.getId(), exception, registration);
+        fallbackFailureUpdate(jobSnapshot.getId(), jobSnapshot.getLockedAt(), exception, registration);
     }
 
-    private void fallbackFailureUpdate(UUID jobId, Exception exception, RegisteredJob registration) {
+    private void fallbackFailureUpdate(
+            UUID jobId, OffsetDateTime expectedLockedAt, Exception exception, RegisteredJob registration) {
         transactionTemplate.executeWithoutResult(
                 status -> jobRepository.findById(jobId).ifPresent(job -> {
-                    if (!isMutableProcessingJob(job)) {
+                    if (!isMutableProcessingJob(job, expectedLockedAt)) {
                         log.debug("Skipping failure fallback for job {} due lifecycle/lock mismatch", jobId);
                         return;
                     }
@@ -1016,7 +1415,45 @@ public class JobPoller {
                         job.setPriority(retryDecision.nextPriority());
                     }
                     jobRepository.save(job);
+                    publishDashboardRefresh(jobId);
                 }));
+    }
+
+    private void handleTimeout(Job jobSnapshot, RegisteredJob registration, long maxExecutionMs) {
+        OffsetDateTime now = OffsetDateTime.now();
+        int currentRetryCount = jobSnapshot.getRetryCount();
+        int nextRetryCount = currentRetryCount + 1;
+        String errorMessage = "Execution timed out after " + maxExecutionMs + " ms";
+
+        if (nextRetryCount > jobSnapshot.getMaxRetries()) {
+            Integer updated = transactionTemplate.execute(status -> jobRepository.markTimedOutTerminal(
+                    jobSnapshot.getId(),
+                    currentRetryCount,
+                    nextRetryCount,
+                    errorMessage,
+                    now,
+                    jobSnapshot.getLockedAt()));
+            if (toAffectedRows(updated) > 0) {
+                log.warn("Marked timed-out job {} as FAILED", jobSnapshot.getId());
+                publishDashboardRefresh(jobSnapshot.getId());
+                return;
+            }
+        } else {
+            RetryDecision retryDecision = computeRetryDecision(jobSnapshot, registration, nextRetryCount, now);
+            Integer updated = transactionTemplate.execute(status -> jobRepository.markTimedOutForRetry(
+                    jobSnapshot.getId(),
+                    currentRetryCount,
+                    nextRetryCount,
+                    errorMessage,
+                    now,
+                    retryDecision.nextRunAt(),
+                    retryDecision.nextPriority(),
+                    jobSnapshot.getLockedAt()));
+            if (toAffectedRows(updated) > 0) {
+                log.warn("Requeued timed-out job {} for retry {}", jobSnapshot.getId(), nextRetryCount);
+                publishDashboardRefresh(jobSnapshot.getId());
+            }
+        }
     }
 
     private RetryDecision computeRetryDecision(
@@ -1065,12 +1502,21 @@ public class JobPoller {
         return updatedRows == null ? 0 : updatedRows;
     }
 
-    private boolean isMutableProcessingJob(Job job) {
+    private boolean isMutableProcessingJob(Job job, OffsetDateTime expectedLockedAt) {
         return job.getProcessingStartedAt() != null
                 && job.getFinishedAt() == null
                 && job.getFailedAt() == null
+                && job.getCancelledAt() == null
                 && job.getLockedAt() != null
+                && (expectedLockedAt == null || expectedLockedAt.equals(job.getLockedAt()))
                 && nodeId.equals(job.getLockedBy());
+    }
+
+    private void publishDashboardRefresh(UUID jobId) {
+        if (dashboardEventBus != null) {
+            dashboardEventBus.publishJobRuntime(jobId);
+            dashboardEventBus.publishRefresh();
+        }
     }
 
     private record RetryDecision(OffsetDateTime nextRunAt, int nextPriority) {}
@@ -1111,9 +1557,36 @@ public class JobPoller {
         void after(UUID jobId, Object payload) throws Exception;
     }
 
+    @EventListener(ContextClosedEvent.class)
+    void onContextClosed() {
+        shutdownInfrastructure();
+    }
+
     @PreDestroy
     void shutdownExecutor() {
-        pollingExecutor.shutdown();
-        processingExecutor.shutdown();
+        shutdownInfrastructure();
+        pollingExecutor.shutdownNow();
+        processingExecutor.shutdownNow();
+        awaitTermination(pollingExecutor, "polling");
+        awaitTermination(processingExecutor, "processing");
+    }
+
+    private void shutdownInfrastructure() {
+        shuttingDown.set(true);
+        localSignalSubscription.run();
+        notificationListenerRunning.set(false);
+        if (notificationListenerThread != null) {
+            notificationListenerThread.interrupt();
+        }
+    }
+
+    private void awaitTermination(ThreadPoolExecutor executor, String executorName) {
+        try {
+            if (!executor.awaitTermination(5, TimeUnit.SECONDS)) {
+                log.debug("Timed out waiting for JobQ {} executor shutdown", executorName);
+            }
+        } catch (InterruptedException interruptedException) {
+            Thread.currentThread().interrupt();
+        }
     }
 }

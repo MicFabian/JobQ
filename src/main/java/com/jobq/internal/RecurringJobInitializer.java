@@ -65,8 +65,7 @@ public class RecurringJobInitializer implements SmartLifecycle {
         }
 
         for (RecurringDefinition recurringDefinition : recurringJobs.values()) {
-            bootstrapRecurringJob(
-                    recurringDefinition.type(), recurringDefinition.cron(), recurringDefinition.maxRetries());
+            bootstrapRecurringJob(recurringDefinition);
         }
 
         this.running = true;
@@ -74,11 +73,18 @@ public class RecurringJobInitializer implements SmartLifecycle {
 
     private void registerRecurringDefinition(
             Map<String, RecurringDefinition> recurringJobs, String type, com.jobq.annotation.Job jobAnnotation) {
-        RecurringDefinition definition =
-                new RecurringDefinition(type, jobAnnotation.cron(), jobAnnotation.maxRetries());
+        RecurringDefinition definition = new RecurringDefinition(
+                type,
+                jobAnnotation.cron(),
+                jobAnnotation.maxRetries(),
+                jobAnnotation.cronMisfirePolicy(),
+                jobAnnotation.maxCatchUpExecutions());
         RecurringDefinition existing = recurringJobs.putIfAbsent(type, definition);
         if (existing != null
-                && (!existing.cron().equals(definition.cron()) || existing.maxRetries() != definition.maxRetries())) {
+                && (!existing.cron().equals(definition.cron())
+                        || existing.maxRetries() != definition.maxRetries()
+                        || existing.cronMisfirePolicy() != definition.cronMisfirePolicy()
+                        || existing.maxCatchUpExecutions() != definition.maxCatchUpExecutions())) {
             throw new IllegalStateException("Recurring job type '" + type
                     + "' is configured multiple times with different cron/retry settings.");
         }
@@ -89,17 +95,26 @@ public class RecurringJobInitializer implements SmartLifecycle {
         return AnnotationUtils.findAnnotation(targetClass, com.jobq.annotation.Job.class);
     }
 
-    private void bootstrapRecurringJob(String type, String cronExpression, int maxRetries) {
+    private void bootstrapRecurringJob(RecurringDefinition definition) {
+        String type = definition.type();
+        String cronExpression = definition.cron();
         try {
             boolean activeExists =
-                    jobRepository.existsByTypeAndCronAndFinishedAtIsNullAndFailedAtIsNull(type, cronExpression);
+                    jobRepository.existsByTypeAndCronAndFinishedAtIsNullAndFailedAtIsNullAndCancelledAtIsNull(
+                            type, cronExpression);
             if (!activeExists) {
                 CronExpression cron = CronExpression.parse(cronExpression);
-                OffsetDateTime nextRun = cron.next(OffsetDateTime.now());
+                OffsetDateTime nextRun = resolveBootstrapRunAt(definition, cron, OffsetDateTime.now());
 
                 if (nextRun != null) {
                     Job job = new Job(
-                            UUID.randomUUID(), type, null, maxRetries, 0, null, recurringReplaceKey(cronExpression));
+                            UUID.randomUUID(),
+                            type,
+                            null,
+                            definition.maxRetries(),
+                            0,
+                            null,
+                            recurringReplaceKey(cronExpression));
                     job.setCron(cronExpression);
                     job.setRunAt(nextRun);
                     try {
@@ -122,6 +137,41 @@ public class RecurringJobInitializer implements SmartLifecycle {
         } catch (Exception e) {
             log.error("Failed to bootstrap recurring job {} with cron '{}'", type, cronExpression, e);
         }
+    }
+
+    private OffsetDateTime resolveBootstrapRunAt(
+            RecurringDefinition definition, CronExpression cron, OffsetDateTime now) {
+        Job latest = jobRepository.findTopByTypeAndCronOrderByRunAtDesc(definition.type(), definition.cron());
+        if (latest == null || latest.getRunAt() == null) {
+            return cron.next(now);
+        }
+
+        OffsetDateTime expectedNext = cron.next(latest.getRunAt());
+        if (expectedNext == null) {
+            return null;
+        }
+
+        return switch (definition.cronMisfirePolicy()) {
+            case SKIP -> {
+                OffsetDateTime nextFuture = cron.next(now);
+                yield nextFuture == null ? expectedNext : nextFuture;
+            }
+            case FIRE_ONCE -> expectedNext.isBefore(now) ? now : expectedNext;
+            case CATCH_UP -> capCatchUpAnchor(expectedNext, now, definition.maxCatchUpExecutions(), cron);
+        };
+    }
+
+    private OffsetDateTime capCatchUpAnchor(
+            OffsetDateTime candidate, OffsetDateTime now, int maxCatchUpExecutions, CronExpression cron) {
+        OffsetDateTime current = candidate;
+        OffsetDateTime newestWithinLimit = candidate;
+        int observed = 0;
+        while (current != null && !current.isAfter(now) && observed < maxCatchUpExecutions) {
+            newestWithinLimit = current;
+            current = cron.next(current);
+            observed++;
+        }
+        return newestWithinLimit;
     }
 
     @Override
@@ -151,5 +201,10 @@ public class RecurringJobInitializer implements SmartLifecycle {
         return ClassUtils.getUserClass(ownerClass).getName();
     }
 
-    private record RecurringDefinition(String type, String cron, int maxRetries) {}
+    private record RecurringDefinition(
+            String type,
+            String cron,
+            int maxRetries,
+            com.jobq.annotation.Job.CronMisfirePolicy cronMisfirePolicy,
+            int maxCatchUpExecutions) {}
 }

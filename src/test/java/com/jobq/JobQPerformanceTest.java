@@ -67,7 +67,8 @@ class JobQPerformanceTest {
 
     @BeforeEach
     void setUp() {
-        jdbcTemplate.update("TRUNCATE TABLE jobq_jobs");
+        jdbcTemplate.update(
+                "TRUNCATE TABLE jobq_job_logs, jobq_dashboard_audit_log, jobq_worker_nodes, jobq_queue_controls, jobq_jobs RESTART IDENTITY CASCADE");
         perfFastLatch = null;
     }
 
@@ -131,6 +132,27 @@ class JobQPerformanceTest {
 
         System.out.printf(
                 "PERF enqueue_throughput jobs=%d elapsed_ms=%d jobs_per_sec=%.2f%n", jobs, elapsedMs, throughput);
+    }
+
+    @Test
+    void shouldReportBatchEnqueueThroughput() {
+        int jobs = 5_000;
+        java.time.OffsetDateTime runAt = OffsetDateTime.now().plusMinutes(10);
+        java.util.List<TestPayload> payloads = java.util.stream.IntStream.range(0, jobs)
+                .mapToObj(i -> new TestPayload("batch-" + i))
+                .toList();
+
+        long startNanos = System.nanoTime();
+        jobClient.enqueueAllAt("PERF_FAST_JOB", payloads, runAt);
+        long elapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNanos);
+        double throughput = jobs / Math.max(1.0, elapsedMs / 1000.0);
+
+        long persisted = queryCount("SELECT count(*) FROM jobq_jobs WHERE type = 'PERF_FAST_JOB'");
+        assertEquals(jobs, persisted);
+        assertTrue(elapsedMs < 60_000, "Batch enqueue performance regression");
+
+        System.out.printf(
+                "PERF batch_enqueue_throughput jobs=%d elapsed_ms=%d jobs_per_sec=%.2f%n", jobs, elapsedMs, throughput);
     }
 
     @Test

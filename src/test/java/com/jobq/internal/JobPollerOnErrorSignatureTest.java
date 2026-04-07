@@ -6,10 +6,13 @@ import static org.mockito.Mockito.mock;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.jobq.JobRepository;
+import com.jobq.JobRuntime;
 import com.jobq.config.JobQProperties;
 import java.util.List;
+import javax.sql.DataSource;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.ListableBeanFactory;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.transaction.support.TransactionTemplate;
 
@@ -23,7 +26,33 @@ class JobPollerOnErrorSignatureTest {
                 mock(ListableBeanFactory.class),
                 new ObjectMapper(),
                 mock(TransactionTemplate.class),
-                new JobQProperties());
+                new JobQProperties(),
+                mock(DataSource.class),
+                mock(JdbcTemplate.class),
+                mock(JobSignalPublisher.class),
+                mock(JobOperationsService.class),
+                mock(JobRuntime.class),
+                new org.springframework.beans.factory.ObjectProvider<>() {
+                    @Override
+                    public com.jobq.dashboard.JobDashboardEventBus getObject(Object... args) {
+                        return null;
+                    }
+
+                    @Override
+                    public com.jobq.dashboard.JobDashboardEventBus getIfAvailable() {
+                        return null;
+                    }
+
+                    @Override
+                    public com.jobq.dashboard.JobDashboardEventBus getIfUnique() {
+                        return null;
+                    }
+
+                    @Override
+                    public com.jobq.dashboard.JobDashboardEventBus getObject() {
+                        return null;
+                    }
+                });
 
         Boolean acceptsException =
                 ReflectionTestUtils.invokeMethod(poller, "acceptsSupportedOnErrorExceptionType", Exception.class);

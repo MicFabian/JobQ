@@ -24,13 +24,20 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.jobq.Job;
 import com.jobq.JobRepository;
+import com.jobq.config.JobQProperties;
+import com.jobq.internal.JobOperationsService;
+import com.jobq.internal.JobTypeMetadataRegistry;
+import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.Pageable;
@@ -73,6 +80,11 @@ class JobQHtmxControllerTest {
 
             @Override
             public Long getFailedCount() {
+                return 0L;
+            }
+
+            @Override
+            public Long getCancelledCount() {
                 return 0L;
             }
         };
@@ -599,6 +611,114 @@ class JobQHtmxControllerTest {
                         anyString(), anyBoolean(), anyBoolean(), any(UUID.class), any(OffsetDateTime.class), any());
     }
 
+    @Test
+    void shouldOnlyShowOperationallyRelevantQueuesByDefault() throws Exception {
+        JobOperationsService operationsService = mock(JobOperationsService.class);
+        JobTypeMetadataRegistry metadataRegistry = mock(JobTypeMetadataRegistry.class);
+        JobQProperties properties = new JobQProperties();
+
+        JobQDashboardController controller = new JobQDashboardController(
+                jobRepository,
+                objectMapper,
+                nullProvider(),
+                operationsService,
+                metadataRegistry,
+                properties,
+                new JobPayloadRedactor(properties),
+                nullProvider());
+        MockMvc controllerMockMvc = MockMvcBuilders.standaloneSetup(controller).build();
+
+        when(metadataRegistry.registeredJobTypes()).thenReturn(Set.of("active", "completed-only", "controlled"));
+        when(metadataRegistry.recurringMetadata()).thenReturn(Map.of());
+        when(operationsService.loadQueueStats(any(), any()))
+                .thenReturn(List.of(
+                        new JobOperationsService.QueueStats(
+                                "active", 1, 0, 0, 0, 0, null, null, false, null, null, null, false),
+                        new JobOperationsService.QueueStats(
+                                "completed-only", 0, 0, 4, 0, 1, null, null, false, null, null, null, false),
+                        new JobOperationsService.QueueStats(
+                                "controlled", 0, 0, 0, 0, 0, null, null, true, 2, null, null, false)));
+
+        controllerMockMvc.perform(get("/jobq/htmx/queues-panel"))
+                .andExpect(status().isOk())
+                .andExpect(content().string(containsString("active")))
+                .andExpect(content().string(containsString("controlled")))
+                .andExpect(content()
+                        .string(containsString("Queues with active work, failures, controls, or cron schedules")))
+                .andExpect(content().string(not(containsString("completed-only"))));
+
+        controllerMockMvc.perform(get("/jobq/htmx/queues-panel").param("queueScope", "all"))
+                .andExpect(status().isOk())
+                .andExpect(content().string(containsString("All registered job types")))
+                .andExpect(content().string(containsString("completed-only")));
+    }
+
+    @Test
+    void shouldRenderMetricsPanel() throws Exception {
+        JobOperationsService operationsService = mock(JobOperationsService.class);
+        JobQProperties properties = new JobQProperties();
+
+        JobQDashboardController controller = new JobQDashboardController(
+                jobRepository,
+                objectMapper,
+                nullProvider(),
+                operationsService,
+                mock(JobTypeMetadataRegistry.class),
+                properties,
+                new JobPayloadRedactor(properties),
+                nullProvider());
+        MockMvc controllerMockMvc = MockMvcBuilders.standaloneSetup(controller).build();
+
+        when(operationsService.loadDashboardMetrics(any(Duration.class)))
+                .thenReturn(new JobOperationsService.DashboardMetricsSnapshot(
+                        Duration.ofHours(6),
+                        42.0,
+                        84.0,
+                        126.0,
+                        210.0,
+                        420.0,
+                        840.0,
+                        12.5,
+                        8.3,
+                        20,
+                        2,
+                        1,
+                        List.of(
+                                new JobOperationsService.MetricsPoint(OffsetDateTime.now().minusMinutes(30), 3, 1, 0),
+                                new JobOperationsService.MetricsPoint(OffsetDateTime.now(), 4, 0, 1))));
+
+        controllerMockMvc.perform(get("/jobq/htmx/metrics-panel"))
+                .andExpect(status().isOk())
+                .andExpect(content().string(containsString("Failure rate")))
+                .andExpect(content().string(containsString("Queue p50")))
+                .andExpect(content().string(containsString("Runtime p50")))
+                .andExpect(content().string(containsString("12.50 jobs/min")));
+    }
+
+    private <T> ObjectProvider<T> nullProvider() {
+        return new ObjectProvider<>() {
+            @Override
+            public T getObject(Object... args) {
+                return null;
+            }
+
+            @Override
+            public T getIfAvailable() {
+                return null;
+            }
+
+            @Override
+            public T getIfUnique() {
+                return null;
+            }
+
+            @Override
+            public T getObject() {
+                return null;
+            }
+        };
+    }
+
     private JobRepository.DashboardJobView dashboardRow(
             UUID id,
             String type,
@@ -677,6 +797,21 @@ class JobQHtmxControllerTest {
             @Override
             public String getErrorMessage() {
                 return errorMessage;
+            }
+
+            @Override
+            public OffsetDateTime getCancelledAt() {
+                return null;
+            }
+
+            @Override
+            public Integer getProgressPercent() {
+                return null;
+            }
+
+            @Override
+            public String getProgressMessage() {
+                return null;
             }
         };
     }

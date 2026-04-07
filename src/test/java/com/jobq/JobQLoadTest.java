@@ -72,7 +72,8 @@ class JobQLoadTest {
 
     @BeforeEach
     void setUp() {
-        jdbcTemplate.update("TRUNCATE TABLE jobq_jobs");
+        jdbcTemplate.update(
+                "TRUNCATE TABLE jobq_job_logs, jobq_dashboard_audit_log, jobq_worker_nodes, jobq_queue_controls, jobq_jobs RESTART IDENTITY CASCADE");
         fastLatch = null;
         scheduledLatch = null;
         flakyAttempts.clear();

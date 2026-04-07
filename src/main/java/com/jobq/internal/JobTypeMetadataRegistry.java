@@ -6,6 +6,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import org.springframework.beans.factory.ListableBeanFactory;
 import org.springframework.core.annotation.AnnotationUtils;
 import org.springframework.stereotype.Component;
@@ -34,8 +35,15 @@ public class JobTypeMetadataRegistry {
             String jobType = normalizeRequiredType(worker.getJobType(), "JobWorker " + workerClass.getName());
             com.jobq.annotation.Job jobAnnotation = findJobAnnotation(worker);
             long initialDelayMs = jobAnnotation != null ? sanitizeInitialDelayMs(jobAnnotation.initialDelayMs()) : 0L;
+            long maxExecutionMs = jobAnnotation != null ? sanitizeMaxExecutionMs(jobAnnotation.maxExecutionMs()) : 0L;
             Integer annotationMaxRetries =
                     jobAnnotation != null ? sanitizeMaxRetries(jobAnnotation.maxRetries()) : null;
+            String recurringCron = sanitizeRecurringCron(jobAnnotation);
+            com.jobq.annotation.Job.CronMisfirePolicy cronMisfirePolicy = jobAnnotation != null
+                    ? jobAnnotation.cronMisfirePolicy()
+                    : com.jobq.annotation.Job.CronMisfirePolicy.SKIP;
+            int maxCatchUpExecutions =
+                    jobAnnotation != null ? sanitizeMaxCatchUpExecutions(jobAnnotation.maxCatchUpExecutions()) : 24;
             com.jobq.annotation.Job.DeduplicationRunAtPolicy deduplicationRunAtPolicy = jobAnnotation != null
                     ? jobAnnotation.deduplicationRunAtPolicy()
                     : com.jobq.annotation.Job.DeduplicationRunAtPolicy.UPDATE_ON_REPLACE;
@@ -46,6 +54,10 @@ public class JobTypeMetadataRegistry {
                     metadata,
                     jobType,
                     initialDelayMs,
+                    maxExecutionMs,
+                    recurringCron,
+                    cronMisfirePolicy,
+                    maxCatchUpExecutions,
                     deduplicationRunAtPolicy,
                     groupDelayPolicy,
                     annotationMaxRetries,
@@ -69,10 +81,15 @@ public class JobTypeMetadataRegistry {
                     jobAnnotation.value(), beanClass, "@Job bean " + beanClass.getName());
 
             long initialDelayMs = sanitizeInitialDelayMs(jobAnnotation.initialDelayMs());
+            long maxExecutionMs = sanitizeMaxExecutionMs(jobAnnotation.maxExecutionMs());
             register(
                     metadata,
                     jobType,
                     initialDelayMs,
+                    maxExecutionMs,
+                    sanitizeRecurringCron(jobAnnotation),
+                    jobAnnotation.cronMisfirePolicy(),
+                    sanitizeMaxCatchUpExecutions(jobAnnotation.maxCatchUpExecutions()),
                     jobAnnotation.deduplicationRunAtPolicy(),
                     jobAnnotation.groupDelayPolicy(),
                     sanitizeMaxRetries(jobAnnotation.maxRetries()),
@@ -89,6 +106,10 @@ public class JobTypeMetadataRegistry {
         return metadata == null ? 0L : metadata.initialDelayMs();
     }
 
+    public Set<String> registeredJobTypes() {
+        return metadataByType.keySet();
+    }
+
     public com.jobq.annotation.Job.DeduplicationRunAtPolicy deduplicationRunAtPolicyFor(String jobType) {
         JobTypeMetadata metadata = metadataByType.get(jobType);
         return metadata == null
@@ -101,6 +122,45 @@ public class JobTypeMetadataRegistry {
         return metadata == null
                 ? com.jobq.annotation.Job.GroupDelayPolicy.KEEP_EXISTING_DELAY_RUN_ALL_ON_FIRST_DUE
                 : metadata.groupDelayPolicy();
+    }
+
+    public long maxExecutionMsFor(String jobType) {
+        JobTypeMetadata metadata = metadataByType.get(jobType);
+        return metadata == null ? 0L : metadata.maxExecutionMs();
+    }
+
+    public String recurringCronFor(String jobType) {
+        JobTypeMetadata metadata = metadataByType.get(jobType);
+        return metadata == null ? null : metadata.recurringCron();
+    }
+
+    public com.jobq.annotation.Job.CronMisfirePolicy cronMisfirePolicyFor(String jobType) {
+        JobTypeMetadata metadata = metadataByType.get(jobType);
+        return metadata == null ? com.jobq.annotation.Job.CronMisfirePolicy.SKIP : metadata.cronMisfirePolicy();
+    }
+
+    public int maxCatchUpExecutionsFor(String jobType) {
+        JobTypeMetadata metadata = metadataByType.get(jobType);
+        return metadata == null ? 24 : metadata.maxCatchUpExecutions();
+    }
+
+    public Map<String, RecurringJobMetadata> recurringMetadata() {
+        Map<String, RecurringJobMetadata> recurring = new LinkedHashMap<>();
+        for (Map.Entry<String, JobTypeMetadata> entry : metadataByType.entrySet()) {
+            JobTypeMetadata metadata = entry.getValue();
+            if (metadata.recurringCron() == null || metadata.recurringCron().isBlank()) {
+                continue;
+            }
+            recurring.put(
+                    entry.getKey(),
+                    new RecurringJobMetadata(
+                            entry.getKey(),
+                            metadata.recurringCron(),
+                            metadata.cronMisfirePolicy(),
+                            metadata.maxCatchUpExecutions(),
+                            metadata.annotationMaxRetries()));
+        }
+        return Map.copyOf(recurring);
     }
 
     public int defaultMaxRetriesFor(String jobType, int fallbackMaxRetries) {
@@ -137,15 +197,31 @@ public class JobTypeMetadataRegistry {
             Map<String, JobTypeMetadata> metadata,
             String jobType,
             long initialDelayMs,
+            long maxExecutionMs,
+            String recurringCron,
+            com.jobq.annotation.Job.CronMisfirePolicy cronMisfirePolicy,
+            int maxCatchUpExecutions,
             com.jobq.annotation.Job.DeduplicationRunAtPolicy deduplicationRunAtPolicy,
             com.jobq.annotation.Job.GroupDelayPolicy groupDelayPolicy,
             Integer annotationMaxRetries,
             String source) {
         JobTypeMetadata existing = metadata.putIfAbsent(
                 jobType,
-                new JobTypeMetadata(initialDelayMs, deduplicationRunAtPolicy, groupDelayPolicy, annotationMaxRetries));
+                new JobTypeMetadata(
+                        initialDelayMs,
+                        maxExecutionMs,
+                        recurringCron,
+                        cronMisfirePolicy,
+                        maxCatchUpExecutions,
+                        deduplicationRunAtPolicy,
+                        groupDelayPolicy,
+                        annotationMaxRetries));
         if (existing != null
                 && (existing.initialDelayMs() != initialDelayMs
+                        || existing.maxExecutionMs() != maxExecutionMs
+                        || !Objects.equals(existing.recurringCron(), recurringCron)
+                        || existing.cronMisfirePolicy() != cronMisfirePolicy
+                        || existing.maxCatchUpExecutions() != maxCatchUpExecutions
                         || existing.deduplicationRunAtPolicy() != deduplicationRunAtPolicy
                         || existing.groupDelayPolicy() != groupDelayPolicy
                         || !Objects.equals(existing.annotationMaxRetries(), annotationMaxRetries))) {
@@ -194,6 +270,29 @@ public class JobTypeMetadataRegistry {
         return maxRetries;
     }
 
+    private long sanitizeMaxExecutionMs(long maxExecutionMs) {
+        if (maxExecutionMs < 0) {
+            throw new IllegalStateException("@Job maxExecutionMs must be >= 0");
+        }
+        return maxExecutionMs;
+    }
+
+    private int sanitizeMaxCatchUpExecutions(int maxCatchUpExecutions) {
+        if (maxCatchUpExecutions <= 0) {
+            throw new IllegalStateException("@Job maxCatchUpExecutions must be > 0");
+        }
+        return maxCatchUpExecutions;
+    }
+
+    private String sanitizeRecurringCron(com.jobq.annotation.Job jobAnnotation) {
+        if (jobAnnotation == null
+                || jobAnnotation.cron() == null
+                || jobAnnotation.cron().isBlank()) {
+            return null;
+        }
+        return jobAnnotation.cron().trim();
+    }
+
     private void registerClassMapping(
             Map<Class<?>, String> classMappings, Class<?> sourceClass, String jobType, String source) {
         String existingType = classMappings.putIfAbsent(sourceClass, jobType);
@@ -205,7 +304,18 @@ public class JobTypeMetadataRegistry {
 
     private record JobTypeMetadata(
             long initialDelayMs,
+            long maxExecutionMs,
+            String recurringCron,
+            com.jobq.annotation.Job.CronMisfirePolicy cronMisfirePolicy,
+            int maxCatchUpExecutions,
             com.jobq.annotation.Job.DeduplicationRunAtPolicy deduplicationRunAtPolicy,
             com.jobq.annotation.Job.GroupDelayPolicy groupDelayPolicy,
             Integer annotationMaxRetries) {}
+
+    public record RecurringJobMetadata(
+            String type,
+            String cron,
+            com.jobq.annotation.Job.CronMisfirePolicy cronMisfirePolicy,
+            int maxCatchUpExecutions,
+            Integer maxRetries) {}
 }
