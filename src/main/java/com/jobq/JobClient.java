@@ -14,6 +14,7 @@ import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 import java.util.regex.Pattern;
 import org.slf4j.Logger;
@@ -267,6 +268,7 @@ public class JobClient {
             String replaceKey,
             OffsetDateTime explicitRunAt) {
         String normalizedType = normalizeRequiredType(type);
+        validateRegisteredTypeIfKnown(normalizedType);
         validateMaxRetries(maxRetries);
         String normalizedGroupId = normalizeOptionalString(groupId);
         String normalizedReplaceKey = normalizeOptionalString(replaceKey);
@@ -311,6 +313,7 @@ public class JobClient {
 
     private List<UUID> enqueueAll(String type, Collection<?> payloads, int maxRetries, OffsetDateTime explicitRunAt) {
         String normalizedType = normalizeRequiredType(type);
+        validateRegisteredTypeIfKnown(normalizedType);
         validateMaxRetries(maxRetries);
         if (payloads == null || payloads.isEmpty()) {
             return List.of();
@@ -343,6 +346,24 @@ public class JobClient {
             throw new IllegalArgumentException("Job type must not be blank");
         }
         return trimmed;
+    }
+
+    private void validateRegisteredTypeIfKnown(String normalizedType) {
+        if (jobTypeMetadataRegistry == null) {
+            return;
+        }
+        Set<String> registeredTypes = jobTypeMetadataRegistry.registeredJobTypes();
+        if (registeredTypes == null || registeredTypes.isEmpty() || registeredTypes.contains(normalizedType)) {
+            return;
+        }
+
+        String knownTypesHint = registeredTypes.size() <= 8
+                ? " Registered job types: " + String.join(", ", registeredTypes) + "."
+                : " Registered job type count: " + registeredTypes.size() + ".";
+        throw new IllegalArgumentException("Unknown JobQ type '" + normalizedType
+                + "'. No registered JobQ handler matches it. If @Job.value was omitted, JobQ uses job class name as"
+                + " type. Use enqueue(MyJob.class, payload) or add explicit @Job(\"" + normalizedType + "\")."
+                + knownTypesHint);
     }
 
     private void validateMaxRetries(int maxRetries) {

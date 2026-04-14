@@ -614,6 +614,7 @@ public class JobQDashboardController {
                             <td class="px-4 py-3 text-slate-400">%s</td>
                             <td class="px-4 py-3 text-slate-400">%d / %d</td>
                             <td class="px-4 py-3 text-slate-400">%s</td>
+                            <td class="px-4 py-3 text-slate-400">%s</td>
                         </tr>
                         """
                                 .formatted(
@@ -623,6 +624,9 @@ public class JobQDashboardController {
                                                 : "—",
                                         node.activeProcessingCount(),
                                         node.workerCapacity(),
+                                        node.queueTypes().isEmpty()
+                                                ? "—"
+                                                : escapeHtml(String.join(", ", node.queueTypes())),
                                         node.notifyEnabled() ? "LISTEN/NOTIFY" : "Polling only"));
             }
         }
@@ -639,6 +643,7 @@ public class JobQDashboardController {
                                     <th class="px-4 py-3 text-left">Node</th>
                                     <th class="px-4 py-3 text-left">Last Seen</th>
                                     <th class="px-4 py-3 text-left">Active / Capacity</th>
+                                    <th class="px-4 py-3 text-left">Queues</th>
                                     <th class="px-4 py-3 text-left">Dispatch Mode</th>
                                 </tr>
                             </thead>

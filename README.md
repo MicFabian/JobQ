@@ -145,6 +145,10 @@ public class UserService {
 If the transaction rolls back, the job is not persisted.
 The starter auto-registers JobQ JPA packages, so no extra `@EntityScan` / `@EnableJpaRepositories` is required.
 
+If `@Job.value` is omitted, JobQ uses fully-qualified job class name as type.
+For that mode, prefer `jobClient.enqueue(MyJob.class, payload)`.
+If you want string-based enqueue like `jobClient.enqueue("send-welcome-email", payload)`, keep explicit `@Job("send-welcome-email")`.
+
 ## Job Type Resolution
 
 JobQ resolves job type in this order:

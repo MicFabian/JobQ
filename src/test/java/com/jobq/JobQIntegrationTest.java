@@ -1526,8 +1526,9 @@ public class JobQIntegrationTest {
 
     @Test
     void shouldReplaceExistingPendingJobWithSameReplaceKey() {
-        UUID firstId = jobClient.enqueue("TEST_JOB", new TestPayload("original"), "group-a", "dedup-key-1");
-        UUID secondId = jobClient.enqueue("TEST_JOB", new TestPayload("updated"), "group-a", "dedup-key-1");
+        OffsetDateTime runAt = OffsetDateTime.now().plusMinutes(5);
+        UUID firstId = jobClient.enqueueAt("TEST_JOB", new TestPayload("original"), 3, "group-a", "dedup-key-1", runAt);
+        UUID secondId = jobClient.enqueueAt("TEST_JOB", new TestPayload("updated"), 3, "group-a", "dedup-key-1", runAt);
 
         // Same ID returned — the existing job was updated in-place
         assertEquals(firstId, secondId);
@@ -1577,8 +1578,9 @@ public class JobQIntegrationTest {
     @Test
     void shouldDeduplicateConcurrentEnqueueCallsWithSameReplaceKey() throws InterruptedException {
         int callers = 16;
-        String type = "DEDUP_RACE_JOB";
+        String type = "TEST_JOB";
         String replaceKey = "race-key-" + UUID.randomUUID();
+        OffsetDateTime runAt = OffsetDateTime.now().plusMinutes(5);
 
         CountDownLatch ready = new CountDownLatch(callers);
         CountDownLatch start = new CountDownLatch(1);
@@ -1595,7 +1597,8 @@ public class JobQIntegrationTest {
                         failures.add(new IllegalStateException("start latch timeout"));
                         return;
                     }
-                    UUID id = jobClient.enqueue(type, new TestPayload("payload-" + idx), "race-group", replaceKey);
+                    UUID id = jobClient.enqueueAt(
+                            type, new TestPayload("payload-" + idx), 3, "race-group", replaceKey, runAt);
                     returnedIds.add(id);
                 } catch (Throwable t1) {
                     failures.add(t1);

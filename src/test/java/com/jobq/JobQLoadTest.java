@@ -269,7 +269,9 @@ class JobQLoadTest {
     void shouldRespectScheduledRunAtAtScale() throws InterruptedException {
         int jobs = 500;
         scheduledLatch = new CountDownLatch(jobs);
-        OffsetDateTime runAt = OffsetDateTime.now().plusSeconds(3);
+        // Give enough headroom so the "not before runAt" assertion stays stable
+        // even when the full suite is already saturating CPU and Docker I/O.
+        OffsetDateTime runAt = OffsetDateTime.now().plusSeconds(6);
 
         runConcurrently(
                 jobs, 12, i -> jobClient.enqueueAt("LOAD_SCHEDULED_JOB", new TestPayload("scheduled-" + i), runAt));

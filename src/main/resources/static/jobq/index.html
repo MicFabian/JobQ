@@ -553,42 +553,88 @@
             background: rgba(99, 102, 241, 0.14);
             box-shadow: inset 0 0 0 1px rgba(129, 140, 248, 0.45);
         }
+
+        html {
+            scroll-behavior: smooth;
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+            html {
+                scroll-behavior: auto;
+            }
+        }
+
+        .jobq-section-anchor {
+            scroll-margin-top: 7rem;
+        }
     </style>
 </head>
 
 <body class="antialiased min-h-screen flex flex-col selection:bg-indigo-500/30">
 
     <!-- Minimal Header -->
-    <header
-        class="glass-panel sticky top-0 z-40 border-b border-white/5 px-6 py-4 flex justify-between items-center shadow-2xl">
-        <div class="flex items-center gap-3">
-            <div
-                class="bg-indigo-500/20 p-2 rounded-lg border border-indigo-500/30 shadow-[0_0_15px_rgba(99,102,241,0.2)]">
-                <svg class="w-6 h-6 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5"
-                        d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10">
-                    </path>
-                </svg>
+    <header class="glass-panel sticky top-0 z-40 border-b border-white/5 px-4 py-4 shadow-2xl sm:px-6">
+        <div class="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
+            <div class="flex items-center gap-3">
+                <div
+                    class="bg-indigo-500/20 p-2 rounded-lg border border-indigo-500/30 shadow-[0_0_15px_rgba(99,102,241,0.2)]">
+                    <svg class="w-6 h-6 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5"
+                            d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10">
+                        </path>
+                    </svg>
+                </div>
+                <div>
+                    <h1 class="text-xl font-bold tracking-tight text-white leading-tight">JobQ</h1>
+                    <p class="text-[10px] font-mono uppercase tracking-widest text-indigo-400/80 font-semibold">Mission
+                        Control</p>
+                </div>
             </div>
-            <div>
-                <h1 class="text-xl font-bold tracking-tight text-white leading-tight">JobQ</h1>
-                <p class="text-[10px] font-mono uppercase tracking-widest text-indigo-400/80 font-semibold">Mission
-                    Control</p>
-            </div>
-        </div>
 
-        <div class="flex items-center gap-4 text-sm font-medium">
-            <div id="jobq-read-only-badge"
-                class="hidden flex items-center gap-2 px-3 py-1 rounded-full bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs uppercase tracking-wider">
-                Read-only
-            </div>
-            <div class="flex items-center gap-2 px-3 py-1 rounded-full bg-slate-800/50 border border-slate-700/50">
-                <span class="relative flex h-2.5 w-2.5">
-                    <span
-                        class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-                    <span class="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500"></span>
-                </span>
-                <span class="text-xs text-slate-300 tracking-wide">Live Polling</span>
+            <div class="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-end">
+                <nav aria-label="Dashboard sections" class="flex flex-wrap items-center gap-2">
+                    <a href="#jobq-monitoring"
+                        class="group inline-flex items-center gap-3 rounded-xl border border-indigo-500/25 bg-indigo-500/10 px-3 py-2 text-left transition hover:border-indigo-400/50 hover:bg-indigo-500/15">
+                        <span class="flex h-9 w-9 items-center justify-center rounded-lg bg-indigo-500/15 text-indigo-300 border border-indigo-500/20">
+                            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                    d="M3 13h4l3 8 4-16 3 8h4"></path>
+                            </svg>
+                        </span>
+                        <span>
+                            <span class="block text-sm font-semibold text-white">Monitoring</span>
+                            <span class="block text-[11px] uppercase tracking-wider text-slate-400">Signals and job flow</span>
+                        </span>
+                    </a>
+                    <a href="#jobq-management"
+                        class="group inline-flex items-center gap-3 rounded-xl border border-slate-700 bg-slate-900/50 px-3 py-2 text-left transition hover:border-cyan-400/40 hover:bg-cyan-500/10">
+                        <span class="flex h-9 w-9 items-center justify-center rounded-lg bg-cyan-500/10 text-cyan-300 border border-cyan-500/20">
+                            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                    d="M4 6h16M4 12h16M4 18h10"></path>
+                            </svg>
+                        </span>
+                        <span>
+                            <span class="block text-sm font-semibold text-white">JobQ Management</span>
+                            <span class="block text-[11px] uppercase tracking-wider text-slate-400">Queues, controls, audit</span>
+                        </span>
+                    </a>
+                </nav>
+
+                <div class="flex flex-wrap items-center gap-3 text-sm font-medium">
+                    <div id="jobq-read-only-badge"
+                        class="hidden flex items-center gap-2 px-3 py-1 rounded-full bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs uppercase tracking-wider">
+                        Read-only
+                    </div>
+                    <div class="flex items-center gap-2 px-3 py-1 rounded-full bg-slate-800/50 border border-slate-700/50">
+                        <span class="relative flex h-2.5 w-2.5">
+                            <span
+                                class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                            <span class="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500"></span>
+                        </span>
+                        <span class="text-xs text-slate-300 tracking-wide">Live Polling</span>
+                    </div>
+                </div>
             </div>
         </div>
     </header>
@@ -601,6 +647,11 @@
         <input type="hidden" name="query" value="">
         <input type="hidden" name="selectedIds" value="">
         <input type="hidden" name="queueScope" value="interesting">
+
+        <section id="jobq-monitoring" class="jobq-section-anchor space-y-4" aria-labelledby="jobq-monitoring-title">
+            <div class="sr-only">
+                <h2 id="jobq-monitoring-title">Monitoring</h2>
+            </div>
 
         <!-- Stats Container (Auto-refreshes every 5s) -->
         <div id="stats-container" hx-get="/jobq/htmx/stats"
@@ -849,10 +900,12 @@
             </div>
         </div>
 
-        <section class="mt-6 space-y-4">
+        </section>
+
+        <section id="jobq-management" class="jobq-section-anchor mt-6 space-y-4" aria-labelledby="jobq-management-title">
             <div class="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
                 <div>
-                    <h2 class="text-lg font-semibold text-slate-100 tracking-tight">Operations</h2>
+                    <h2 id="jobq-management-title" class="text-lg font-semibold text-slate-100 tracking-tight">JobQ Management</h2>
                     <p class="text-xs uppercase tracking-wider text-slate-500">Metrics, queue controls, recurring schedules, nodes, and audit</p>
                 </div>
                 <div class="flex flex-wrap gap-2">

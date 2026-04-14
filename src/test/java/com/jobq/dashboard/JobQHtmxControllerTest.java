@@ -26,6 +26,7 @@ import com.jobq.Job;
 import com.jobq.JobRepository;
 import com.jobq.config.JobQProperties;
 import com.jobq.internal.JobOperationsService;
+import com.jobq.internal.JobSignalPublisher;
 import com.jobq.internal.JobTypeMetadataRegistry;
 import java.time.Duration;
 import java.time.OffsetDateTime;
@@ -37,6 +38,7 @@ import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.springframework.beans.factory.support.DefaultListableBeanFactory;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
@@ -213,6 +215,45 @@ class JobQHtmxControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(content().string(containsString("Run now")))
                 .andExpect(content().string(containsString("/run-now")));
+    }
+
+    @Test
+    void shouldRenderWorkerNodesPanelWhenHeartbeatExists() throws Exception {
+        JobOperationsService operationsService = mock(JobOperationsService.class);
+        JobTypeMetadataRegistry metadataRegistry = mock(JobTypeMetadataRegistry.class);
+        DefaultListableBeanFactory beanFactory = new DefaultListableBeanFactory();
+        ObjectProvider<JobSignalPublisher> signalPublisherProvider = beanFactory.getBeanProvider(JobSignalPublisher.class);
+        ObjectProvider<JobDashboardEventBus> dashboardEventBusProvider =
+                beanFactory.getBeanProvider(JobDashboardEventBus.class);
+        JobQProperties properties = new JobQProperties();
+        OffsetDateTime now = OffsetDateTime.now();
+        when(operationsService.loadWorkerNodes(any(Duration.class)))
+                .thenReturn(List.of(new JobOperationsService.WorkerNodeStatus(
+                        "node-123",
+                        now.minusMinutes(5),
+                        now.minusSeconds(2),
+                        8,
+                        2,
+                        List.of("TYPE_A", "TYPE_B"),
+                        true)));
+
+        JobQDashboardController controller = new JobQDashboardController(
+                jobRepository,
+                objectMapper,
+                signalPublisherProvider,
+                operationsService,
+                metadataRegistry,
+                properties,
+                new JobPayloadRedactor(properties),
+                dashboardEventBusProvider);
+        MockMvc localMockMvc = MockMvcBuilders.standaloneSetup(controller).build();
+
+        localMockMvc.perform(get("/jobq/htmx/nodes-panel"))
+                .andExpect(status().isOk())
+                .andExpect(content().string(containsString("Worker Nodes")))
+                .andExpect(content().string(containsString("node-123")))
+                .andExpect(content().string(containsString("2 / 8")))
+                .andExpect(content().string(containsString("TYPE_A, TYPE_B")));
     }
 
     @Test

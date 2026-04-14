@@ -22,6 +22,7 @@ import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.Collection;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -44,6 +45,9 @@ class JobClientValidationTest {
     static class ClassNameFallbackJob {}
 
     static class NonJobClass {}
+
+    @com.jobq.annotation.Job("UNREGISTERED_ANNOTATED_JOB")
+    static class UnregisteredAnnotatedJob {}
 
     @BeforeEach
     void setUp() {
@@ -93,6 +97,20 @@ class JobClientValidationTest {
     }
 
     @Test
+    void shouldRejectAnnotatedButUnregisteredJobClassWhenEnqueueingByClass() {
+        when(jobTypeMetadataRegistry.jobTypeFor(UnregisteredAnnotatedJob.class))
+                .thenThrow(new IllegalArgumentException(
+                        "Job class " + UnregisteredAnnotatedJob.class.getName()
+                                + " has @Job but is not registered as a Spring bean."));
+
+        IllegalArgumentException error =
+                assertThrows(IllegalArgumentException.class, () -> jobClient.enqueue(UnregisteredAnnotatedJob.class, "payload"));
+
+        assertTrue(error.getMessage().contains("not registered as a Spring bean"));
+        verifyNoInteractions(jobRepository);
+    }
+
+    @Test
     void shouldRejectNegativeMaxRetries() {
         assertThrows(IllegalArgumentException.class, () -> jobClient.enqueue("TYPE", "payload", -1, null, null));
 
@@ -110,6 +128,20 @@ class JobClientValidationTest {
 
         assertEquals("TYPE_WITH_SPACES", saved.getType());
         assertEquals(jobId, saved.getId());
+    }
+
+    @Test
+    void shouldRejectUnknownJobTypeWhenRegistryHasKnownTypes() {
+        when(jobTypeMetadataRegistry.registeredJobTypes())
+                .thenReturn(Set.of("KNOWN_JOB", ClassBasedJob.class.getName()));
+
+        IllegalArgumentException error =
+                assertThrows(IllegalArgumentException.class, () -> jobClient.enqueue("UNKNOWN_JOB", "payload"));
+
+        assertTrue(error.getMessage().contains("Unknown JobQ type 'UNKNOWN_JOB'"));
+        assertTrue(error.getMessage().contains("enqueue(MyJob.class, payload)"));
+        assertTrue(error.getMessage().contains("@Job(\"UNKNOWN_JOB\")"));
+        verifyNoInteractions(jobRepository);
     }
 
     @Test

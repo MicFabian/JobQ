@@ -190,7 +190,12 @@ public class JobTypeMetadataRegistry {
                     + " is not a registered JobQ bean and has no @Job annotation. "
                     + "Use enqueue(String, payload) or annotate/register the class.");
         }
-        return resolveConfiguredTypeOrClassName(annotation.value(), targetClass, "Job class " + targetClass.getName());
+        String resolvedType = resolveConfiguredTypeOrClassName(
+                annotation.value(), targetClass, "Job class " + targetClass.getName());
+        throw new IllegalArgumentException("Job class " + targetClass.getName()
+                + " has @Job but is not registered as a Spring bean. "
+                + "Ensure the class is in your application component scan or declare it as a @Bean. "
+                + "Resolved job type would be '" + resolvedType + "'.");
     }
 
     private void register(
