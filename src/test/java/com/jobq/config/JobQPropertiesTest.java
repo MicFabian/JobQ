@@ -4,12 +4,12 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
+import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
-import org.springframework.context.annotation.Configuration;
 
 public class JobQPropertiesTest {
 
-    @Configuration
+    @TestConfiguration(proxyBeanMethods = false)
     @EnableConfigurationProperties(JobQProperties.class)
     static class Config {}
 
@@ -22,6 +22,8 @@ public class JobQPropertiesTest {
             JobQProperties properties = context.getBean(JobQProperties.class);
             assertEquals(15, properties.getBackgroundJobServer().getPollIntervalInSeconds());
             assertTrue(properties.getBackgroundJobServer().getWorkerCount() >= 1);
+            assertFalse(properties.getBackgroundJobServer().isVirtualThreadsEnabled());
+            assertEquals(30, properties.getBackgroundJobServer().getRecurringReconciliationIntervalInSeconds());
             assertFalse(properties.getDashboard().isEnabled());
             assertEquals("/jobq/dashboard", properties.getDashboard().getPath());
             assertEquals(
@@ -39,6 +41,8 @@ public class JobQPropertiesTest {
                 .withPropertyValues(
                         "jobq.background-job-server.poll-interval-in-seconds=1",
                         "jobq.background-job-server.worker-count=5",
+                        "jobq.background-job-server.virtual-threads-enabled=true",
+                        "jobq.background-job-server.recurring-reconciliation-interval-in-seconds=7",
                         "jobq.dashboard.enabled=true",
                         "jobq.dashboard.path=/custom/path",
                         "jobq.dashboard.auth-mode=SPRING_SECURITY",
@@ -49,6 +53,8 @@ public class JobQPropertiesTest {
                     JobQProperties properties = context.getBean(JobQProperties.class);
                     assertEquals(1, properties.getBackgroundJobServer().getPollIntervalInSeconds());
                     assertEquals(5, properties.getBackgroundJobServer().getWorkerCount());
+                    assertTrue(properties.getBackgroundJobServer().isVirtualThreadsEnabled());
+                    assertEquals(7, properties.getBackgroundJobServer().getRecurringReconciliationIntervalInSeconds());
                     assertTrue(properties.getDashboard().isEnabled());
                     assertEquals("/custom/path", properties.getDashboard().getPath());
                     assertEquals(

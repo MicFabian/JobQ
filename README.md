@@ -11,14 +11,16 @@ If your business write and job enqueue must succeed or fail together, JobQ is de
 - PostgreSQL concurrency via `FOR UPDATE SKIP LOCKED`
 - Built-in retries, backoff, priority shifting, and expected-exception completion
 - Recurring jobs via `cron` on `@Job`
+- Downtime-aware recurring recovery with configurable cron misfire policy
 - Delayed and explicit-time scheduling (`initialDelayMs`, `enqueueAt`)
 - Batch enqueue APIs for high-throughput inserts
 - Deduplication via `replaceKey` with configurable run-at replacement behavior
 - Queue-level pause/resume, concurrency, rate-limit, and cooldown controls
 - PostgreSQL `LISTEN/NOTIFY` wakeups to reduce idle poll latency
+- Optional virtual-thread job execution while keeping queue backpressure bounded
 - Attempt fencing with execution timeouts (`@Job(maxExecutionMs = ...)`)
 - Job runtime progress + structured runtime logs via `JobRuntime`
-- Built-in HTMX dashboard (filters, sorting, retry/rerun/cancel/run-now actions, details, SSE refresh)
+- Built-in HTMX dashboard with separate monitoring and management workspaces
 - Optional Micrometer metrics with zero hard dependency on actuator/micrometer
 - Built-in schema migration mechanism for starter upgrades
 
@@ -95,7 +97,7 @@ import org.springframework.stereotype.Component;
 import java.util.UUID;
 
 @Component
-@Job(payload = WelcomeEmailPayload.class) // value omitted => job type defaults to fully-qualified class name
+@Job(payload = WelcomeEmailPayload.class) // value omitted => job type defaults to simple class name
 public class WelcomeEmailJob {
 
     public void process(UUID jobId, WelcomeEmailPayload payload) {
@@ -264,7 +266,8 @@ public class WelcomeEmailJob implements JobLifecycle<WelcomeEmailPayload> {
 Notes:
 
 - `@Job(payload = ...)` remains supported and overrides payload inference when provided.
-- If `@Job.value` is omitted, job type defaults to the fully-qualified class name.
+- If `@Job.value` is omitted, job type defaults to the simple class name.
+- If you need a stable external identifier across class renames or want to avoid simple-name collisions, set `@Job("...")` explicitly.
 
 ### `JobWorker<T>` Interface
 
@@ -285,7 +288,7 @@ public class WelcomeEmailWorker implements JobWorker<WelcomeEmailPayload> {
     }
 
     // getPayloadClass() is inferred from JobWorker<WelcomeEmailPayload>
-    // getJobType() is inferred from @Job (value or class name fallback)
+    // getJobType() is inferred from @Job (value or simple class name fallback)
 }
 ```
 
@@ -417,6 +420,7 @@ Behavior:
 
 - On startup, JobQ ensures one active execution exists for each recurring definition
 - On successful completion, JobQ schedules the next run from cron expression
+- A recurring reconciler also runs in the background, so terminal recurring failures or downtime do not permanently stall the schedule
 
 Recurring jobs can also define how missed runs are handled after downtime:
 
@@ -434,6 +438,26 @@ Options:
 - `SKIP`: jump to the next future cron occurrence
 - `FIRE_ONCE`: enqueue one immediate recovery execution, then continue normally
 - `CATCH_UP`: backfill missed executions sequentially up to `maxCatchUpExecutions`
+
+Recurring reconciliation interval is configurable:
+
+```yaml
+jobq:
+  background-job-server:
+    recurring-reconciliation-interval-in-seconds: 30
+```
+
+### Virtual threads
+
+Job execution can run on Java virtual threads while preserving JobQ concurrency limits:
+
+```yaml
+jobq:
+  background-job-server:
+    virtual-threads-enabled: true
+```
+
+When enabled, JobQ still respects `worker-count` as the maximum number of concurrently dispatched jobs.
 
 ## Deduplication and Grouping
 
@@ -491,7 +515,8 @@ Default path: `/jobq/dashboard` (configurable).
 
 ### Features
 
-- Live lifecycle cards and paged job table
+- Monitoring workspace for live lifecycle cards and the job log
+- Management workspace for queue controls, recurring schedules, worker nodes, metrics, and audit history
 - Search (type/group/replace key/full UUID)
 - Status filter, sorting, page-size control
 - Scheduled-only and retried-only filters
@@ -581,7 +606,9 @@ jobq:
   background-job-server:
     enabled: true
     worker-count: 4
+    virtual-threads-enabled: false
     poll-interval-in-seconds: 15
+    recurring-reconciliation-interval-in-seconds: 30
     notify-enabled: true
     notify-channel: jobq_jobs_available
     notify-listen-timeout-ms: 1000

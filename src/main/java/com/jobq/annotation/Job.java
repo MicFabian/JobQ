@@ -13,7 +13,7 @@ public @interface Job {
 
     /**
      * Optional explicit type of job this processor handles.
-     * If blank, JobQ uses the fully-qualified class name as the job type.
+     * If blank, JobQ uses the simple class name as the job type.
      */
     String value() default "";
 

@@ -85,7 +85,9 @@ public class JobQProperties {
     public static class BackgroundJobServer {
         private boolean enabled = true;
         private int workerCount = Math.max(2, Runtime.getRuntime().availableProcessors());
+        private boolean virtualThreadsEnabled = false;
         private long pollIntervalInSeconds = 15;
+        private long recurringReconciliationIntervalInSeconds = 30;
         private boolean notifyEnabled = true;
         private String notifyChannel = "jobq_jobs_available";
         private int notifyListenTimeoutMs = 1_000;
@@ -110,12 +112,28 @@ public class JobQProperties {
             this.workerCount = workerCount;
         }
 
+        public boolean isVirtualThreadsEnabled() {
+            return virtualThreadsEnabled;
+        }
+
+        public void setVirtualThreadsEnabled(boolean virtualThreadsEnabled) {
+            this.virtualThreadsEnabled = virtualThreadsEnabled;
+        }
+
         public long getPollIntervalInSeconds() {
             return pollIntervalInSeconds;
         }
 
         public void setPollIntervalInSeconds(long pollIntervalInSeconds) {
             this.pollIntervalInSeconds = pollIntervalInSeconds;
+        }
+
+        public long getRecurringReconciliationIntervalInSeconds() {
+            return recurringReconciliationIntervalInSeconds;
+        }
+
+        public void setRecurringReconciliationIntervalInSeconds(long recurringReconciliationIntervalInSeconds) {
+            this.recurringReconciliationIntervalInSeconds = recurringReconciliationIntervalInSeconds;
         }
 
         public boolean isNotifyEnabled() {

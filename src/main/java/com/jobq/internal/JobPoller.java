@@ -7,6 +7,7 @@ import com.jobq.Job;
 import com.jobq.JobLifecycle;
 import com.jobq.JobRepository;
 import com.jobq.JobRuntime;
+import com.jobq.JobTypeNames;
 import com.jobq.JobWorker;
 import com.jobq.dashboard.JobDashboardEventBus;
 import jakarta.annotation.PostConstruct;
@@ -25,12 +26,16 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.regex.Pattern;
 import javax.sql.DataSource;
 import org.postgresql.PGConnection;
@@ -66,6 +71,7 @@ public class JobPoller {
     private static final Logger log = LoggerFactory.getLogger(JobPoller.class);
     private static final Pattern SAFE_TABLE_NAME = Pattern.compile("[A-Za-z0-9_]+");
     private static final Pattern SAFE_CHANNEL = Pattern.compile("[A-Za-z0-9_]+");
+    private static final long NOTIFICATION_WARNING_THROTTLE_MS = 30_000L;
 
     private final JobRepository jobRepository;
     private final List<JobWorker<?>> workers;
@@ -81,18 +87,23 @@ public class JobPoller {
     private final JobDashboardEventBus dashboardEventBus;
     private final int workerCount;
     private final int processingQueueCapacity;
-    private final ThreadPoolExecutor processingExecutor;
+    private final ExecutorService processingExecutor;
     private final ThreadPoolExecutor pollingExecutor;
     private final String jobTableName;
     private final String claimNextJobsSql;
     private final String notifyChannel;
     private final int notifyListenTimeoutMs;
+    private final boolean virtualThreadsEnabled;
 
     private final String nodeId = "node-" + UUID.randomUUID().toString();
     private final OffsetDateTime nodeStartedAt = OffsetDateTime.now();
     private final CountDownLatch notificationListenerReady = new CountDownLatch(1);
     private final AtomicBoolean notificationListenerRunning = new AtomicBoolean(false);
+    private final AtomicBoolean notificationListenerConnected = new AtomicBoolean(false);
     private final AtomicBoolean shuttingDown = new AtomicBoolean(false);
+    private final AtomicLong lastNotificationWarningAt = new AtomicLong(0L);
+    private final AtomicInteger queuedOrActiveProcessingCount = new AtomicInteger();
+    private final AtomicInteger activeProcessingCount = new AtomicInteger();
     private final Map<String, AtomicInteger> inFlightByType = new ConcurrentHashMap<>();
     private final Map<String, Long> lastDispatchAtByType = new ConcurrentHashMap<>();
     private volatile Map<String, JobOperationsService.QueueRuntimeState> queueRuntimeStates = Map.of();
@@ -127,6 +138,7 @@ public class JobPoller {
         this.jobRuntime = jobRuntime;
         this.dashboardEventBus = dashboardEventBusProvider.getIfAvailable();
         this.workerCount = Math.max(1, properties.getBackgroundJobServer().getWorkerCount());
+        this.virtualThreadsEnabled = properties.getBackgroundJobServer().isVirtualThreadsEnabled();
         this.jobTableName = resolveJobTableName(properties.getDatabase().getTablePrefix());
         this.claimNextJobsSql = buildClaimNextJobsSql(jobTableName);
         this.notifyChannel =
@@ -134,24 +146,20 @@ public class JobPoller {
         this.notifyListenTimeoutMs =
                 Math.max(100, properties.getBackgroundJobServer().getNotifyListenTimeoutMs());
 
-        this.processingQueueCapacity = Math.max(32, workerCount * 8);
-        this.processingExecutor = new ThreadPoolExecutor(
-                workerCount,
-                workerCount,
-                0L,
-                TimeUnit.MILLISECONDS,
-                new LinkedBlockingQueue<>(this.processingQueueCapacity),
-                new ThreadPoolExecutor.CallerRunsPolicy());
+        this.processingQueueCapacity = virtualThreadsEnabled ? workerCount : Math.max(32, workerCount * 8);
+        this.processingExecutor = createProcessingExecutor();
 
         int pollThreads = Math.min(4, Math.max(1, workerCount / 2));
         int pollingQueueCapacity = Math.max(32, workerCount * 4);
+        ThreadFactory pollingThreadFactory = createPlatformThreadFactory("jobq-polling-");
         this.pollingExecutor = new ThreadPoolExecutor(
                 pollThreads,
                 pollThreads,
                 0L,
                 TimeUnit.MILLISECONDS,
                 new LinkedBlockingQueue<>(pollingQueueCapacity),
-                new ThreadPoolExecutor.CallerRunsPolicy());
+                pollingThreadFactory,
+                new ThreadPoolExecutor.AbortPolicy());
     }
 
     @PostConstruct
@@ -227,19 +235,30 @@ public class JobPoller {
             }
 
             rememberDispatch(jobType);
-            for (Job job : jobs) {
+            for (int index = 0; index < jobs.size(); index++) {
+                Job job = jobs.get(index);
+                if (!reserveProcessingSlot()) {
+                    releaseClaimedJobs(jobs, index);
+                    return;
+                }
                 AtomicInteger inFlightCounter = inFlightByType.computeIfAbsent(jobType, ignored -> new AtomicInteger());
                 int inFlightAfterIncrement = inFlightCounter.incrementAndGet();
                 try {
                     processingExecutor.execute(() -> {
+                        activeProcessingCount.incrementAndGet();
                         try {
                             processJob(job, registration);
                         } finally {
+                            activeProcessingCount.decrementAndGet();
+                            releaseProcessingSlot();
                             inFlightCounter.decrementAndGet();
                         }
                     });
                 } catch (RejectedExecutionException saturatedProcessingQueue) {
+                    releaseProcessingSlot();
                     inFlightCounter.decrementAndGet();
+                    releaseClaimedJob(job);
+                    releaseClaimedJobs(jobs, index + 1);
                     log.debug(
                             "Skipping job {} dispatch for type {} because processing queue is saturated",
                             job.getId(),
@@ -294,7 +313,7 @@ public class JobPoller {
                 nodeStartedAt,
                 OffsetDateTime.now(),
                 workerCount,
-                processingExecutor.getActiveCount(),
+                activeProcessingCount.get(),
                 jobMap.keySet(),
                 properties.getBackgroundJobServer().isNotifyEnabled());
     }
@@ -390,6 +409,21 @@ public class JobPoller {
         return job;
     }
 
+    private void releaseClaimedJobs(List<Job> claimedJobs, int startIndex) {
+        for (int index = startIndex; index < claimedJobs.size(); index++) {
+            releaseClaimedJob(claimedJobs.get(index));
+        }
+    }
+
+    private void releaseClaimedJob(Job job) {
+        OffsetDateTime releasedAt = OffsetDateTime.now();
+        Integer updated = transactionTemplate.execute(
+                status -> jobRepository.releaseClaimedJob(job.getId(), job.getLockedAt(), nodeId, releasedAt));
+        if (toAffectedRows(updated) == 0) {
+            log.debug("Claim release skipped for job {} because it was already transitioned", job.getId());
+        }
+    }
+
     private void refreshQueueRuntimeStates() {
         this.queueRuntimeStates = jobOperationsService.loadQueueRuntimeStates();
     }
@@ -430,9 +464,7 @@ public class JobPoller {
     }
 
     private int availableProcessingSlots() {
-        int inFlight = processingExecutor.getActiveCount()
-                + processingExecutor.getQueue().size();
-        return Math.max(0, processingQueueCapacity - inFlight);
+        return Math.max(0, processingQueueCapacity - queuedOrActiveProcessingCount.get());
     }
 
     private String resolveJobTableName(String tablePrefix) {
@@ -507,8 +539,8 @@ public class JobPoller {
         if (!notificationListenerRunning.compareAndSet(false, true)) {
             return;
         }
-        notificationListenerThread = new Thread(this::runNotificationListener, "jobq-pg-listener-" + nodeId);
-        notificationListenerThread.setDaemon(true);
+        notificationListenerThread =
+                createManagedThread("jobq-pg-listener-" + nodeId, this::runNotificationListener, true);
         notificationListenerThread.start();
         try {
             if (!notificationListenerReady.await(5, TimeUnit.SECONDS)) {
@@ -527,7 +559,10 @@ public class JobPoller {
                 PGConnection pgConnection = connection.unwrap(PGConnection.class);
                 statement.execute("LISTEN " + notifyChannel);
                 notificationListenerReady.countDown();
-                log.info("JobQ PostgreSQL listener active on channel {}", notifyChannel);
+                boolean recovered = !notificationListenerConnected.getAndSet(true);
+                if (recovered) {
+                    log.info("JobQ PostgreSQL listener active on channel {}", notifyChannel);
+                }
 
                 while (notificationListenerRunning.get()) {
                     PGNotification[] notifications = pgConnection.getNotifications(notifyListenTimeoutMs);
@@ -540,6 +575,7 @@ public class JobPoller {
                 }
             } catch (Exception e) {
                 notificationListenerReady.countDown();
+                boolean wasConnected = notificationListenerConnected.getAndSet(false);
                 if (shuttingDown.get()
                         || !notificationListenerRunning.get()
                         || Thread.currentThread().isInterrupted()) {
@@ -547,11 +583,46 @@ public class JobPoller {
                     break;
                 }
                 if (notificationListenerRunning.get()) {
-                    log.warn("JobQ PostgreSQL listener stopped unexpectedly. Retrying.", e);
+                    logNotificationListenerFailure(e, wasConnected);
                     sleepQuietly(1_000);
                 }
             }
         }
+    }
+
+    private void logNotificationListenerFailure(Exception exception, boolean wasConnected) {
+        String failureSummary = summarizeException(exception);
+        if (shouldWarnNotificationListenerFailure(wasConnected, System.currentTimeMillis())) {
+            log.warn(
+                    "JobQ PostgreSQL listener unavailable on channel {}. Retrying in 1s. Cause: {}",
+                    notifyChannel,
+                    failureSummary);
+            return;
+        }
+        log.debug("JobQ PostgreSQL listener retry suppressed on channel {}. Cause: {}", notifyChannel, failureSummary);
+    }
+
+    boolean shouldWarnNotificationListenerFailure(boolean wasConnected, long nowMillis) {
+        if (wasConnected) {
+            lastNotificationWarningAt.set(nowMillis);
+            return true;
+        }
+
+        long lastWarning = lastNotificationWarningAt.get();
+        return nowMillis - lastWarning >= NOTIFICATION_WARNING_THROTTLE_MS
+                && lastNotificationWarningAt.compareAndSet(lastWarning, nowMillis);
+    }
+
+    String summarizeException(Throwable throwable) {
+        Throwable current = throwable;
+        while (current.getCause() != null && current.getCause() != current) {
+            current = current.getCause();
+        }
+        String message = current.getMessage();
+        if (message == null || message.isBlank()) {
+            return current.getClass().getSimpleName();
+        }
+        return current.getClass().getSimpleName() + ": " + message;
     }
 
     private void handleNotificationPayload(String payload) {
@@ -572,6 +643,47 @@ public class JobPoller {
         } catch (InterruptedException interruptedException) {
             Thread.currentThread().interrupt();
         }
+    }
+
+    private ExecutorService createProcessingExecutor() {
+        if (virtualThreadsEnabled) {
+            return Executors.newVirtualThreadPerTaskExecutor();
+        }
+        return new ThreadPoolExecutor(
+                workerCount,
+                workerCount,
+                0L,
+                TimeUnit.MILLISECONDS,
+                new LinkedBlockingQueue<>(processingQueueCapacity),
+                createPlatformThreadFactory("jobq-processing-"),
+                new ThreadPoolExecutor.AbortPolicy());
+    }
+
+    private boolean reserveProcessingSlot() {
+        while (true) {
+            int current = queuedOrActiveProcessingCount.get();
+            if (current >= processingQueueCapacity) {
+                return false;
+            }
+            if (queuedOrActiveProcessingCount.compareAndSet(current, current + 1)) {
+                return true;
+            }
+        }
+    }
+
+    private void releaseProcessingSlot() {
+        queuedOrActiveProcessingCount.updateAndGet(current -> current > 0 ? current - 1 : 0);
+    }
+
+    private ThreadFactory createPlatformThreadFactory(String threadNamePrefix) {
+        AtomicInteger threadCounter = new AtomicInteger();
+        return runnable -> createManagedThread(threadNamePrefix + threadCounter.incrementAndGet(), runnable, false);
+    }
+
+    private Thread createManagedThread(String threadName, Runnable runnable, boolean daemon) {
+        Thread thread = new Thread(runnable, threadName);
+        thread.setDaemon(daemon);
+        return thread;
     }
 
     private long maxExecutionMs(RegisteredJob registration) {
@@ -750,11 +862,7 @@ public class JobPoller {
     }
 
     private String resolveConfiguredTypeOrClassName(String configuredType, Class<?> ownerClass) {
-        String normalized = configuredType == null ? "" : configuredType.trim();
-        if (!normalized.isEmpty()) {
-            return normalized;
-        }
-        return ClassUtils.getUserClass(ownerClass).getName();
+        return JobTypeNames.configuredOrDefault(configuredType, ownerClass);
     }
 
     private void registerJob(
@@ -1580,7 +1688,7 @@ public class JobPoller {
         }
     }
 
-    private void awaitTermination(ThreadPoolExecutor executor, String executorName) {
+    private void awaitTermination(java.util.concurrent.ExecutorService executor, String executorName) {
         try {
             if (!executor.awaitTermination(5, TimeUnit.SECONDS)) {
                 log.debug("Timed out waiting for JobQ {} executor shutdown", executorName);

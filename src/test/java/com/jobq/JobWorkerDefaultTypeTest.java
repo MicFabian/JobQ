@@ -48,7 +48,7 @@ class JobWorkerDefaultTypeTest {
 
     @Test
     void shouldFallbackToClassNameWhenAnnotationValueIsOmitted() {
-        assertEquals(AnnotatedClassNameWorker.class.getName(), new AnnotatedClassNameWorker().getJobType());
+        assertEquals(AnnotatedClassNameWorker.class.getSimpleName(), new AnnotatedClassNameWorker().getJobType());
     }
 
     @Test

@@ -1,4 +1,6 @@
 spring:
+  main:
+    banner-mode: off
   datasource:
     url: jdbc:postgresql://${testcontainers.postgresql.host}:${testcontainers.postgresql.port}/${testcontainers.postgresql.database}
     username: ${testcontainers.postgresql.username}
@@ -8,9 +10,14 @@ spring:
     open-in-view: false
 
 jobq:
-  polling:
-    delay: 500 # Poll every 500ms for faster tests
+  background-job-server:
+    notify-enabled: false
 
 logging:
   level:
-    com.jobq: DEBUG
+    root: WARN
+    com.jobq: WARN
+    com.zaxxer.hikari: ERROR
+    org.hibernate.orm.jdbc.error: ERROR
+    org.testcontainers: WARN
+    tc: WARN

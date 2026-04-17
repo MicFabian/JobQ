@@ -564,6 +564,28 @@ public interface JobRepository extends JpaRepository<Job, UUID> {
     @Query(
             """
             UPDATE Job j
+            SET j.processingStartedAt = NULL,
+                j.lockedAt = NULL,
+                j.lockedBy = NULL,
+                j.updatedAt = :now
+            WHERE j.id = :id
+              AND j.processingStartedAt = :expectedLockedAt
+              AND j.finishedAt IS NULL
+              AND j.failedAt IS NULL
+              AND j.cancelledAt IS NULL
+              AND j.lockedAt = :expectedLockedAt
+              AND j.lockedBy = :lockedBy
+            """)
+    int releaseClaimedJob(
+            @Param("id") UUID id,
+            @Param("expectedLockedAt") OffsetDateTime expectedLockedAt,
+            @Param("lockedBy") String lockedBy,
+            @Param("now") OffsetDateTime now);
+
+    @Modifying
+    @Query(
+            """
+            UPDATE Job j
             SET j.runAt = :now,
                 j.updatedAt = :now
             WHERE j.type = :type

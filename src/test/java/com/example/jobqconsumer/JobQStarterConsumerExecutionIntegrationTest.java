@@ -80,8 +80,7 @@ class JobQStarterConsumerExecutionIntegrationTest {
             assertEquals(3, job.getMaxRetries());
             assertEquals(1, consumerNoteRepository.count());
             assertEquals(
-                    "explicit:hello",
-                    consumerNoteRepository.findAll().get(0).getMessage());
+                    "explicit:hello", consumerNoteRepository.findAll().get(0).getMessage());
         });
     }
 
@@ -92,12 +91,10 @@ class JobQStarterConsumerExecutionIntegrationTest {
         Awaitility.await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
             Job job = jobRepository.findById(jobId).orElseThrow();
             assertEquals("COMPLETED", job.getStatus());
-            assertEquals(ConsumerClassNameJob.class.getName(), job.getType());
+            assertEquals(ConsumerClassNameJob.class.getSimpleName(), job.getType());
             assertEquals(3, job.getMaxRetries());
             assertEquals(1, consumerNoteRepository.count());
-            assertEquals(
-                    "class:world",
-                    consumerNoteRepository.findAll().get(0).getMessage());
+            assertEquals("class:world", consumerNoteRepository.findAll().get(0).getMessage());
         });
     }
 
@@ -108,7 +105,7 @@ class JobQStarterConsumerExecutionIntegrationTest {
             assertFalse(nodes.isEmpty());
             assertTrue(nodes.stream().anyMatch(node -> node.queueTypes().contains("CONSUMER_AUTO_CONFIG_JOB")));
             assertTrue(nodes.stream()
-                    .anyMatch(node -> node.queueTypes().contains(ConsumerClassNameJob.class.getName())));
+                    .anyMatch(node -> node.queueTypes().contains(ConsumerClassNameJob.class.getSimpleName())));
         });
     }
 

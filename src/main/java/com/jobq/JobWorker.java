@@ -29,9 +29,7 @@ public interface JobWorker<T> {
             throw new IllegalStateException("JobWorker " + targetClass.getName()
                     + " must either be annotated with @Job or override getJobType()");
         }
-        String configuredType =
-                annotation.value() == null ? "" : annotation.value().trim();
-        return configuredType.isEmpty() ? targetClass.getName() : configuredType;
+        return JobTypeNames.configuredOrDefault(annotation.value(), targetClass);
     }
 
     /**

@@ -431,9 +431,7 @@ public class JobClient {
             throw new IllegalArgumentException("Job class " + targetClass.getName()
                     + " has no @Job annotation and no registry mapping. Use enqueue(String, payload).");
         }
-        String configuredType =
-                annotation.value() == null ? "" : annotation.value().trim();
-        return normalizeRequiredType(configuredType.isEmpty() ? targetClass.getName() : configuredType);
+        return normalizeRequiredType(JobTypeNames.configuredOrDefault(annotation.value(), targetClass));
     }
 
     private boolean shouldUpdateRunAtOnReplace(String jobType, OffsetDateTime explicitRunAt) {

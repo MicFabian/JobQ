@@ -18,8 +18,8 @@ import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Bean;
-import org.springframework.context.annotation.Configuration;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
@@ -32,9 +32,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
         classes = {TestApplication.class, JobQPerformanceTest.PerformanceTestConfig.class},
         properties = {
             "jobq.background-job-server.poll-interval-in-seconds=1",
-            "jobq.background-job-server.worker-count=32",
-            "logging.level.com.jobq.JobClient=INFO",
-            "logging.level.com.jobq.internal.JobPoller=INFO"
+            "jobq.background-job-server.worker-count=32"
         })
 @ActiveProfiles("test")
 @Testcontainers
@@ -72,7 +70,7 @@ class JobQPerformanceTest {
         perfFastLatch = null;
     }
 
-    @Configuration
+    @TestConfiguration(proxyBeanMethods = false)
     static class PerformanceTestConfig {
 
         @Bean

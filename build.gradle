@@ -78,10 +78,20 @@ dependencies {
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 }
 
-tasks.withType(Test) {
-    useJUnitPlatform()
+tasks.withType(Test).configureEach {
     // Keep Mockito/ByteBuddy stable on newer JDKs while suppressing JVM attach/CDS warnings.
     jvmArgs "-Dnet.bytebuddy.experimental=true", "-XX:+EnableDynamicAgentLoading", "-Xshare:off"
+    testLogging {
+        events "failed", "skipped"
+        exceptionFormat "short"
+        showStandardStreams = false
+    }
+}
+
+tasks.named('test', Test) {
+    useJUnitPlatform {
+        excludeTags 'load', 'perf'
+    }
 }
 
 tasks.withType(Javadoc).configureEach {
@@ -97,6 +107,8 @@ spotless {
 }
 
 tasks.register('loadTest', Test) {
+    testClassesDirs = sourceSets.test.output.classesDirs
+    classpath = sourceSets.test.runtimeClasspath
     useJUnitPlatform {
         includeTags 'load'
     }
@@ -106,16 +118,14 @@ tasks.register('loadTest', Test) {
 }
 
 tasks.register('perfTest', Test) {
+    testClassesDirs = sourceSets.test.output.classesDirs
+    classpath = sourceSets.test.runtimeClasspath
     useJUnitPlatform {
         includeTags 'perf'
     }
     description = 'Runs JobQ performance benchmark tests'
     group = 'verification'
     jvmArgs "-Dnet.bytebuddy.experimental=true", "-XX:+EnableDynamicAgentLoading", "-Xshare:off"
-    testLogging {
-        events "passed", "failed", "skipped"
-        showStandardStreams = true
-    }
 }
 
 tasks.register('writeTestRuntimeClasspath') {

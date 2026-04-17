@@ -2,18 +2,24 @@ package com.jobq.internal;
 
 import com.jobq.Job;
 import com.jobq.JobRepository;
+import com.jobq.JobTypeNames;
 import com.jobq.JobWorker;
+import java.time.Clock;
 import java.time.OffsetDateTime;
+import java.util.ArrayDeque;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicBoolean;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ListableBeanFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.SmartLifecycle;
 import org.springframework.core.annotation.AnnotationUtils;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.scheduling.support.CronExpression;
 import org.springframework.stereotype.Component;
 import org.springframework.util.ClassUtils;
@@ -30,45 +36,66 @@ public class RecurringJobInitializer implements SmartLifecycle {
     private final JobRepository jobRepository;
     private final List<JobWorker<?>> workers;
     private final ListableBeanFactory beanFactory;
+    private final Clock clock;
+    private final AtomicBoolean reconciliationInProgress = new AtomicBoolean(false);
     private boolean running = false;
 
+    @Autowired
     public RecurringJobInitializer(
             JobRepository jobRepository, List<JobWorker<?>> workers, ListableBeanFactory beanFactory) {
+        this(jobRepository, workers, beanFactory, Clock.systemDefaultZone());
+    }
+
+    RecurringJobInitializer(
+            JobRepository jobRepository, List<JobWorker<?>> workers, ListableBeanFactory beanFactory, Clock clock) {
         this.jobRepository = jobRepository;
         this.workers = workers;
         this.beanFactory = beanFactory;
+        this.clock = clock;
     }
 
     @Override
     public void start() {
-        log.info("Checking for recurring jobs to bootstrap...");
-        Map<String, RecurringDefinition> recurringJobs = new LinkedHashMap<>();
-
-        for (JobWorker<?> worker : workers) {
-            com.jobq.annotation.Job jobAnnotation = findJobAnnotation(worker);
-            if (jobAnnotation != null && !jobAnnotation.cron().isBlank()) {
-                registerRecurringDefinition(recurringJobs, worker.getJobType(), jobAnnotation);
-            }
-        }
-
-        Map<String, Object> annotatedBeans = beanFactory.getBeansWithAnnotation(com.jobq.annotation.Job.class);
-        for (Object bean : annotatedBeans.values()) {
-            if (bean instanceof JobWorker<?>) {
-                continue;
-            }
-            com.jobq.annotation.Job jobAnnotation = findJobAnnotation(bean);
-            if (jobAnnotation == null || jobAnnotation.cron().isBlank()) {
-                continue;
-            }
-            String type = resolveConfiguredTypeOrClassName(jobAnnotation.value(), ClassUtils.getUserClass(bean));
-            registerRecurringDefinition(recurringJobs, type, jobAnnotation);
-        }
-
-        for (RecurringDefinition recurringDefinition : recurringJobs.values()) {
-            bootstrapRecurringJob(recurringDefinition);
-        }
-
         this.running = true;
+        reconcileRecurringJobs();
+    }
+
+    @Scheduled(fixedDelayString = "${jobq.background-job-server.recurring-reconciliation-interval-in-seconds:30}000")
+    public void reconcileRecurringJobs() {
+        if (!running || !reconciliationInProgress.compareAndSet(false, true)) {
+            return;
+        }
+
+        try {
+            log.debug("Reconciling recurring jobs");
+            Map<String, RecurringDefinition> recurringJobs = new LinkedHashMap<>();
+
+            for (JobWorker<?> worker : workers) {
+                com.jobq.annotation.Job jobAnnotation = findJobAnnotation(worker);
+                if (jobAnnotation != null && !jobAnnotation.cron().isBlank()) {
+                    registerRecurringDefinition(recurringJobs, worker.getJobType(), jobAnnotation);
+                }
+            }
+
+            Map<String, Object> annotatedBeans = beanFactory.getBeansWithAnnotation(com.jobq.annotation.Job.class);
+            for (Object bean : annotatedBeans.values()) {
+                if (bean instanceof JobWorker<?>) {
+                    continue;
+                }
+                com.jobq.annotation.Job jobAnnotation = findJobAnnotation(bean);
+                if (jobAnnotation == null || jobAnnotation.cron().isBlank()) {
+                    continue;
+                }
+                String type = resolveConfiguredTypeOrClassName(jobAnnotation.value(), ClassUtils.getUserClass(bean));
+                registerRecurringDefinition(recurringJobs, type, jobAnnotation);
+            }
+
+            for (RecurringDefinition recurringDefinition : recurringJobs.values()) {
+                bootstrapRecurringJob(recurringDefinition);
+            }
+        } finally {
+            reconciliationInProgress.set(false);
+        }
     }
 
     private void registerRecurringDefinition(
@@ -104,7 +131,7 @@ public class RecurringJobInitializer implements SmartLifecycle {
                             type, cronExpression);
             if (!activeExists) {
                 CronExpression cron = CronExpression.parse(cronExpression);
-                OffsetDateTime nextRun = resolveBootstrapRunAt(definition, cron, OffsetDateTime.now());
+                OffsetDateTime nextRun = resolveBootstrapRunAt(definition, cron, OffsetDateTime.now(clock));
 
                 if (nextRun != null) {
                     Job job = new Job(
@@ -163,15 +190,16 @@ public class RecurringJobInitializer implements SmartLifecycle {
 
     private OffsetDateTime capCatchUpAnchor(
             OffsetDateTime candidate, OffsetDateTime now, int maxCatchUpExecutions, CronExpression cron) {
+        ArrayDeque<OffsetDateTime> retainedOverdueRuns = new ArrayDeque<>(Math.max(1, maxCatchUpExecutions));
         OffsetDateTime current = candidate;
-        OffsetDateTime newestWithinLimit = candidate;
-        int observed = 0;
-        while (current != null && !current.isAfter(now) && observed < maxCatchUpExecutions) {
-            newestWithinLimit = current;
+        while (current != null && !current.isAfter(now)) {
+            if (retainedOverdueRuns.size() == maxCatchUpExecutions) {
+                retainedOverdueRuns.removeFirst();
+            }
+            retainedOverdueRuns.addLast(current);
             current = cron.next(current);
-            observed++;
         }
-        return newestWithinLimit;
+        return retainedOverdueRuns.peekFirst();
     }
 
     @Override
@@ -194,11 +222,7 @@ public class RecurringJobInitializer implements SmartLifecycle {
     }
 
     private String resolveConfiguredTypeOrClassName(String configuredType, Class<?> ownerClass) {
-        String normalized = configuredType == null ? "" : configuredType.trim();
-        if (!normalized.isEmpty()) {
-            return normalized;
-        }
-        return ClassUtils.getUserClass(ownerClass).getName();
+        return JobTypeNames.configuredOrDefault(configuredType, ownerClass);
     }
 
     private record RecurringDefinition(

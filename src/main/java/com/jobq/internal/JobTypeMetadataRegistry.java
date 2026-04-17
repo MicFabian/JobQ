@@ -1,5 +1,6 @@
 package com.jobq.internal;
 
+import com.jobq.JobTypeNames;
 import com.jobq.JobWorker;
 import jakarta.annotation.PostConstruct;
 import java.util.LinkedHashMap;
@@ -190,8 +191,8 @@ public class JobTypeMetadataRegistry {
                     + " is not a registered JobQ bean and has no @Job annotation. "
                     + "Use enqueue(String, payload) or annotate/register the class.");
         }
-        String resolvedType = resolveConfiguredTypeOrClassName(
-                annotation.value(), targetClass, "Job class " + targetClass.getName());
+        String resolvedType =
+                resolveConfiguredTypeOrClassName(annotation.value(), targetClass, "Job class " + targetClass.getName());
         throw new IllegalArgumentException("Job class " + targetClass.getName()
                 + " has @Job but is not registered as a Spring bean. "
                 + "Ensure the class is in your application component scan or declare it as a @Bean. "
@@ -253,12 +254,7 @@ public class JobTypeMetadataRegistry {
     }
 
     private String resolveConfiguredTypeOrClassName(String configuredType, Class<?> ownerClass, String source) {
-        String normalized = configuredType == null ? "" : configuredType.trim();
-        if (!normalized.isEmpty()) {
-            return normalizeRequiredType(normalized, source);
-        }
-        Class<?> targetClass = ClassUtils.getUserClass(ownerClass);
-        return normalizeRequiredType(targetClass.getName(), source);
+        return normalizeRequiredType(JobTypeNames.configuredOrDefault(configuredType, ownerClass), source);
     }
 
     private long sanitizeInitialDelayMs(long initialDelayMs) {

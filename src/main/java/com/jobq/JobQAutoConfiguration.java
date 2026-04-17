@@ -13,13 +13,17 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.boot.hibernate.autoconfigure.HibernatePropertiesCustomizer;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.ComponentScan;
+import org.springframework.context.annotation.FilterType;
 import org.springframework.context.annotation.Import;
 import org.springframework.scheduling.annotation.EnableScheduling;
 
 @AutoConfiguration
 @AutoConfigurationPackage
 @Import(JobQEntityScanRegistrar.class)
-@ComponentScan("com.jobq")
+@ComponentScan(
+        basePackages = "com.jobq",
+        excludeFilters =
+                @ComponentScan.Filter(type = FilterType.REGEX, pattern = "com\\.jobq\\..*(Test|Tests|IT)(\\$.*)?"))
 @EnableScheduling
 @EnableConfigurationProperties(JobQProperties.class)
 public class JobQAutoConfiguration {

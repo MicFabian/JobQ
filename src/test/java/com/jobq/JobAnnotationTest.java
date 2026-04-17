@@ -9,11 +9,13 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Bean;
-import org.springframework.context.annotation.Configuration;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
@@ -50,9 +52,19 @@ public class JobAnnotationTest {
     @Autowired
     JobRepository jobRepository;
 
+    @Autowired
+    JdbcTemplate jdbcTemplate;
+
     static volatile CountDownLatch jobLatch;
 
-    @Configuration
+    @BeforeEach
+    void setUp() {
+        jdbcTemplate.update(
+                "TRUNCATE TABLE jobq_job_logs, jobq_dashboard_audit_log, jobq_worker_nodes, jobq_queue_controls, jobq_jobs RESTART IDENTITY CASCADE");
+        jobLatch = null;
+    }
+
+    @TestConfiguration(proxyBeanMethods = false)
     static class AnnotationTestConfig {
 
         @com.jobq.annotation.Job(

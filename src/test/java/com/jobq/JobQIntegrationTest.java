@@ -20,8 +20,8 @@ import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Bean;
-import org.springframework.context.annotation.Configuration;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
@@ -114,7 +114,7 @@ public class JobQIntegrationTest {
     static volatile UUID lastLifecycleErrorAfterJobId;
     static volatile String lastLifecycleErrorAfterMessage;
 
-    @Configuration
+    @TestConfiguration(proxyBeanMethods = false)
     static class TestConfig {
         @Bean
         JobWorker<TestPayload> testJobWorker() {
@@ -1019,7 +1019,7 @@ public class JobQIntegrationTest {
 
         await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
             Job job = jobRepository.findById(jobId).orElseThrow();
-            assertEquals(TestConfig.AnnotationClassNameJob.class.getName(), job.getType());
+            assertEquals(TestConfig.AnnotationClassNameJob.class.getSimpleName(), job.getType());
             assertEquals(jobId, lastAnnotationOnlyProcessedJobId);
             assertEquals("Class-name type", lastAnnotationOnlyMessage);
             assertEquals("COMPLETED", job.getStatus());

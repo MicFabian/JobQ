@@ -46,6 +46,33 @@
             nodes: 'jobq-nodes-panel',
             audit: 'jobq-audit-panel'
         };
+        const jobqOpsTabMeta = {
+            queues: {
+                eyebrow: 'Queue control',
+                title: 'Queues and dispatch',
+                description: 'Inspect backlog, pause or resume flow, and narrow the queue view to the jobs that matter.'
+            },
+            metrics: {
+                eyebrow: 'Throughput',
+                title: 'Metrics and trends',
+                description: 'Track retries, success rate, runtime, and polling behavior for the active worker fleet.'
+            },
+            recurring: {
+                eyebrow: 'Scheduling',
+                title: 'Recurring schedules',
+                description: 'Review cron-driven work, check next runs, and verify recurring jobs were registered correctly.'
+            },
+            nodes: {
+                eyebrow: 'Cluster health',
+                title: 'Worker nodes',
+                description: 'See active workers, capacity, and recent heartbeat activity across the cluster.'
+            },
+            audit: {
+                eyebrow: 'Change history',
+                title: 'Audit trail',
+                description: 'Review operator actions such as retries, force-runs, cancellations, and queue controls.'
+            }
+        };
 
         function jobqSetPage(page) {
             const pageInput = document.querySelector('input[name=page]');
@@ -422,10 +449,68 @@
             };
         }
 
+        function jobqUpdateSectionNav() {
+            const monitoringLink = document.getElementById('jobq-nav-monitoring');
+            const managementLink = document.getElementById('jobq-nav-management');
+            if (!monitoringLink || !managementLink || !window.IntersectionObserver) {
+                return;
+            }
+
+            const navConfig = {
+                'jobq-monitoring': monitoringLink,
+                'jobq-management': managementLink
+            };
+
+            const applyActiveState = (activeId) => {
+                Object.entries(navConfig).forEach(([sectionId, link]) => {
+                    const isActive = sectionId === activeId;
+                    link.classList.toggle('bg-indigo-500/15', isActive);
+                    link.classList.toggle('border-indigo-400/50', isActive);
+                    link.classList.toggle('text-white', isActive);
+                    link.classList.toggle('shadow-[0_0_0_1px_rgba(129,140,248,0.3)]', isActive);
+                    link.classList.toggle('bg-slate-900/50', !isActive);
+                    link.classList.toggle('border-slate-700/80', !isActive);
+                    link.classList.toggle('text-slate-300', !isActive);
+                });
+            };
+
+            const observer = new IntersectionObserver((entries) => {
+                const visible = entries
+                    .filter((entry) => entry.isIntersecting)
+                    .sort((a, b) => b.intersectionRatio - a.intersectionRatio);
+                if (visible.length > 0) {
+                    applyActiveState(visible[0].target.id);
+                }
+            }, {
+                rootMargin: '-25% 0px -55% 0px',
+                threshold: [0.2, 0.45, 0.7]
+            });
+
+            Object.keys(navConfig).forEach((sectionId) => {
+                const section = document.getElementById(sectionId);
+                if (section) {
+                    observer.observe(section);
+                }
+            });
+
+            applyActiveState('jobq-monitoring');
+        }
+
+        function jobqUpdateOpsSummary(tabName) {
+            const meta = jobqOpsTabMeta[tabName] || jobqOpsTabMeta.queues;
+            const eyebrow = document.getElementById('jobq-ops-eyebrow');
+            const title = document.getElementById('jobq-ops-title');
+            const description = document.getElementById('jobq-ops-description');
+            if (eyebrow) eyebrow.textContent = meta.eyebrow;
+            if (title) title.textContent = meta.title;
+            if (description) description.textContent = meta.description;
+        }
+
         function jobqSetOpsTab(tabName) {
             const activeTab = jobqOpsTabs.includes(tabName) ? tabName : 'queues';
             localStorage.setItem('jobq:ops-tab', activeTab);
             document.body.dataset.jobqOpsTab = activeTab;
+            jobqUpdateOpsSummary(activeTab);
             jobqOpsTabs.forEach((tab) => {
                 const button = document.getElementById(`jobq-ops-tab-${tab}`);
                 const panel = document.getElementById(`jobq-ops-panel-${tab}`);
@@ -494,6 +579,7 @@
             jobqRenderSavedViews();
             jobqInitEventStream();
             jobqInitOpsTabs();
+            jobqUpdateSectionNav();
             jobqSyncSelectionState();
             jobqSyncBatchActionState();
         });
@@ -567,6 +653,14 @@
         .jobq-section-anchor {
             scroll-margin-top: 7rem;
         }
+
+        details > summary {
+            list-style: none;
+        }
+
+        details > summary::-webkit-details-marker {
+            display: none;
+        }
     </style>
 </head>
 
@@ -574,7 +668,7 @@
 
     <!-- Minimal Header -->
     <header class="glass-panel sticky top-0 z-40 border-b border-white/5 px-4 py-4 shadow-2xl sm:px-6">
-        <div class="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
+        <div class="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
             <div class="flex items-center gap-3">
                 <div
                     class="bg-indigo-500/20 p-2 rounded-lg border border-indigo-500/30 shadow-[0_0_15px_rgba(99,102,241,0.2)]">
@@ -588,35 +682,37 @@
                     <h1 class="text-xl font-bold tracking-tight text-white leading-tight">JobQ</h1>
                     <p class="text-[10px] font-mono uppercase tracking-widest text-indigo-400/80 font-semibold">Mission
                         Control</p>
+                    <p class="mt-1 text-sm text-slate-400">One place for live job monitoring and operational controls.</p>
                 </div>
             </div>
 
-            <div class="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-end">
-                <nav aria-label="Dashboard sections" class="flex flex-wrap items-center gap-2">
-                    <a href="#jobq-monitoring"
-                        class="group inline-flex items-center gap-3 rounded-xl border border-indigo-500/25 bg-indigo-500/10 px-3 py-2 text-left transition hover:border-indigo-400/50 hover:bg-indigo-500/15">
-                        <span class="flex h-9 w-9 items-center justify-center rounded-lg bg-indigo-500/15 text-indigo-300 border border-indigo-500/20">
+            <div class="flex flex-col gap-3 lg:items-end">
+                <nav aria-label="Dashboard sections"
+                    class="inline-flex w-full flex-col rounded-2xl border border-slate-800/80 bg-slate-950/55 p-1 sm:w-auto sm:flex-row sm:items-center">
+                    <a id="jobq-nav-monitoring" href="#jobq-monitoring"
+                        class="group inline-flex min-w-[14rem] items-center gap-3 rounded-xl border border-slate-700/80 bg-slate-900/50 px-4 py-3 text-left text-slate-300 transition hover:border-indigo-400/40 hover:bg-indigo-500/10">
+                        <span class="flex h-10 w-10 items-center justify-center rounded-lg bg-indigo-500/12 text-indigo-300 border border-indigo-500/20">
                             <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
                                     d="M3 13h4l3 8 4-16 3 8h4"></path>
                             </svg>
                         </span>
                         <span>
-                            <span class="block text-sm font-semibold text-white">Monitoring</span>
-                            <span class="block text-[11px] uppercase tracking-wider text-slate-400">Signals and job flow</span>
+                            <span class="block text-sm font-semibold">Monitoring</span>
+                            <span class="block text-[11px] uppercase tracking-wider text-slate-400">Stats, filters, job log</span>
                         </span>
                     </a>
-                    <a href="#jobq-management"
-                        class="group inline-flex items-center gap-3 rounded-xl border border-slate-700 bg-slate-900/50 px-3 py-2 text-left transition hover:border-cyan-400/40 hover:bg-cyan-500/10">
-                        <span class="flex h-9 w-9 items-center justify-center rounded-lg bg-cyan-500/10 text-cyan-300 border border-cyan-500/20">
+                    <a id="jobq-nav-management" href="#jobq-management"
+                        class="group inline-flex min-w-[14rem] items-center gap-3 rounded-xl border border-slate-700/80 bg-slate-900/50 px-4 py-3 text-left text-slate-300 transition hover:border-indigo-400/40 hover:bg-indigo-500/10">
+                        <span class="flex h-10 w-10 items-center justify-center rounded-lg bg-cyan-500/10 text-cyan-300 border border-cyan-500/20">
                             <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
                                     d="M4 6h16M4 12h16M4 18h10"></path>
                             </svg>
                         </span>
                         <span>
-                            <span class="block text-sm font-semibold text-white">JobQ Management</span>
-                            <span class="block text-[11px] uppercase tracking-wider text-slate-400">Queues, controls, audit</span>
+                            <span class="block text-sm font-semibold">JobQ Management</span>
+                            <span class="block text-[11px] uppercase tracking-wider text-slate-400">Queues, nodes, audit</span>
                         </span>
                     </a>
                 </nav>
@@ -649,291 +745,381 @@
         <input type="hidden" name="queueScope" value="interesting">
 
         <section id="jobq-monitoring" class="jobq-section-anchor space-y-4" aria-labelledby="jobq-monitoring-title">
-            <div class="sr-only">
-                <h2 id="jobq-monitoring-title">Monitoring</h2>
-            </div>
-
-        <!-- Stats Container (Auto-refreshes every 5s) -->
-        <div id="stats-container" hx-get="/jobq/htmx/stats"
-            hx-trigger="load, jobq-refresh from:body, every 5s [!document.hidden && document.getElementById('jobq-auto-refresh') && document.getElementById('jobq-auto-refresh').checked]"
-            hx-include="[name='status']">
-            <!-- Rendered by Server -->
-        </div>
-
-        <div class="glass-panel rounded-xl px-4 py-4 mb-4 border border-slate-800/70">
-            <div class="flex flex-wrap items-end gap-3">
-                <div class="min-w-[16rem] flex-1 lg:min-w-[20rem]">
-                    <label class="block text-[11px] uppercase tracking-wider text-slate-500 mb-1">Search</label>
-                    <input type="text" name="queryInput" placeholder="Type, group, key, status, error or full UUID"
-                        class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500/60"
-                        oninput="jobqSetQuery(this.value);jobqHandleSearchInput()"
-                        onkeydown="if(event.key==='Enter'){event.preventDefault();jobqSetQuery(this.value);jobqRefresh(true)}">
+            <div class="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+                <div>
+                    <p class="text-[11px] font-mono uppercase tracking-[0.28em] text-indigo-400/75">Monitoring workspace</p>
+                    <h2 id="jobq-monitoring-title" class="mt-1 text-2xl font-semibold tracking-tight text-white">Watch flow, inspect jobs, recover fast</h2>
+                    <p class="mt-2 max-w-3xl text-sm text-slate-400">Use the log to investigate what is running now. Filters and batch actions below only affect the job list, not the management panels.</p>
                 </div>
-                <div class="w-full sm:w-44">
-                    <label class="block text-[11px] uppercase tracking-wider text-slate-500 mb-1">Status</label>
-                    <select name="statusFilter"
-                        class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500/60"
-                        onchange="document.querySelectorAll('input[name=status]').forEach(e=>e.value=this.value);jobqRefresh(true)">
-                        <option value="">All</option>
-                        <option value="PENDING">Pending</option>
-                        <option value="PROCESSING">Processing</option>
-                        <option value="COMPLETED">Completed</option>
-                        <option value="FAILED">Failed</option>
-                        <option value="CANCELLED">Cancelled</option>
-                    </select>
-                </div>
-                <div class="w-full sm:w-44">
-                    <label class="block text-[11px] uppercase tracking-wider text-slate-500 mb-1">Sort</label>
-                    <select name="sort"
-                        class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500/60"
-                        onchange="jobqRefresh(true)">
-                        <option value="created-desc">Newest</option>
-                        <option value="created-asc">Oldest</option>
-                        <option value="run-at-asc">Run time soonest</option>
-                        <option value="run-at-desc">Run time latest</option>
-                        <option value="priority-desc">Priority high</option>
-                        <option value="priority-asc">Priority low</option>
-                        <option value="retry-desc">Most retries</option>
-                        <option value="failed-desc">Latest failed</option>
-                        <option value="type-asc">Type A-Z</option>
-                        <option value="type-desc">Type Z-A</option>
-                    </select>
-                </div>
-                <div class="w-full sm:w-28">
-                    <label class="block text-[11px] uppercase tracking-wider text-slate-500 mb-1">Page Size</label>
-                    <select name="size"
-                        class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500/60"
-                        onchange="jobqRefresh(true)">
-                        <option value="25">25</option>
-                        <option value="50" selected>50</option>
-                        <option value="100">100</option>
-                        <option value="200">200</option>
-                    </select>
-                </div>
-                <div class="flex flex-wrap items-center gap-x-5 gap-y-2 px-3 py-2 rounded-lg bg-slate-900/40 border border-slate-800">
-                    <label class="inline-flex items-center gap-2 text-sm text-slate-300 cursor-pointer whitespace-nowrap">
-                        <input type="checkbox" name="scheduledOnly" value="true" class="rounded border-slate-600 bg-slate-900 text-indigo-500"
-                            onchange="jobqRefresh(true)">
-                        <span>Scheduled only</span>
-                    </label>
-                    <label class="inline-flex items-center gap-2 text-sm text-slate-300 cursor-pointer whitespace-nowrap">
-                        <input type="checkbox" name="retriedOnly" value="true" class="rounded border-slate-600 bg-slate-900 text-indigo-500"
-                            onchange="jobqRefresh(true)">
-                        <span>Retried only</span>
-                    </label>
-                    <label class="inline-flex items-center gap-2 text-sm text-slate-300 cursor-pointer whitespace-nowrap">
-                        <input id="jobq-auto-refresh" type="checkbox" checked class="rounded border-slate-600 bg-slate-900 text-indigo-500"
-                            onchange="if(this.checked){jobqRefresh(false)}">
-                        <span>Auto refresh</span>
-                    </label>
-                </div>
-                <div class="flex items-center gap-2 lg:ml-auto">
-                    <select id="jobq-saved-views"
-                        class="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500/60"
-                        onchange="jobqApplySavedView(this.value)">
-                        <option value="">Saved view</option>
-                    </select>
-                    <button type="button"
-                        class="px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-slate-200 text-sm hover:bg-slate-700 transition"
-                        onclick="jobqSaveCurrentView()">
-                        Save view
-                    </button>
-                    <button type="button"
-                        class="px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-slate-200 text-sm hover:bg-slate-700 transition"
-                        onclick="jobqRefresh(false)">
-                        Refresh
-                    </button>
-                    <button type="button"
-                        class="px-3 py-2 rounded-lg bg-indigo-600/90 border border-indigo-500/60 text-white text-sm hover:bg-indigo-500 transition"
-                        onclick="jobqClearFilters()">
-                        Clear
-                    </button>
+                <div class="flex flex-wrap items-center gap-2 text-xs text-slate-400">
+                    <span class="rounded-full border border-slate-800 bg-slate-950/50 px-3 py-1">Live stats</span>
+                    <span class="rounded-full border border-slate-800 bg-slate-950/50 px-3 py-1">Silent polling</span>
+                    <span class="rounded-full border border-slate-800 bg-slate-950/50 px-3 py-1">Batch recovery</span>
                 </div>
             </div>
-            <div class="mt-3 flex flex-wrap items-end gap-3 border-t border-slate-800/60 pt-3">
-                <div class="flex items-center gap-2 rounded-lg bg-slate-900/40 border border-slate-800 px-3 py-2">
-                    <span id="jobq-selected-count" class="text-sm text-slate-300 font-medium">0 selected</span>
-                    <span class="text-xs text-slate-500">across pages</span>
-                    <button id="jobq-clear-selection" type="button"
-                        class="px-2 py-1 rounded-md border border-slate-700 text-slate-300 text-xs hover:bg-slate-800 transition disabled:opacity-50"
-                        onclick="jobqClearSelection()" disabled>
-                        Clear selection
-                    </button>
-                </div>
-                <button id="jobq-rerun-selected" type="button"
-                    data-jobq-write
-                    class="px-3 py-2 rounded-lg bg-indigo-600 border border-indigo-500/60 text-white text-sm hover:bg-indigo-500 transition disabled:opacity-50 disabled:cursor-not-allowed"
-                    hx-post="/jobq/htmx/jobs/rerun-selected"
-                    hx-target="#jobq-action-feedback"
-                    hx-swap="innerHTML"
-                    hx-indicator="#jobq-loading-indicator"
-                    hx-include="[name='selectedIds']"
-                    disabled>
-                    Rerun selected
-                </button>
-                <button type="button"
-                    data-jobq-write
-                    class="px-3 py-2 rounded-lg bg-emerald-600/90 border border-emerald-500/60 text-white text-sm hover:bg-emerald-500 transition"
-                    hx-post="/jobq/htmx/jobs/rerun-filtered"
-                    hx-target="#jobq-action-feedback"
-                    hx-swap="innerHTML"
-                    hx-indicator="#jobq-loading-indicator"
-                    hx-include="[name='status'], [name='query'], [name='scheduledOnly'], [name='retriedOnly']">
-                    Rerun filtered
-                </button>
-                <button type="button"
-                    data-jobq-write
-                    class="px-3 py-2 rounded-lg bg-blue-600/90 border border-blue-500/60 text-white text-sm hover:bg-blue-500 transition"
-                    hx-post="/jobq/htmx/jobs/run-filtered-now"
-                    hx-target="#jobq-action-feedback"
-                    hx-swap="innerHTML"
-                    hx-indicator="#jobq-loading-indicator"
-                    hx-include="[name='status'], [name='query'], [name='scheduledOnly'], [name='retriedOnly']">
-                    Run delayed now
-                </button>
-                <button type="button"
-                    data-jobq-write
-                    class="px-3 py-2 rounded-lg bg-slate-700 border border-slate-600 text-white text-sm hover:bg-slate-600 transition"
-                    hx-post="/jobq/htmx/jobs/cancel-filtered"
-                    hx-target="#jobq-action-feedback"
-                    hx-swap="innerHTML"
-                    hx-indicator="#jobq-loading-indicator"
-                    hx-include="[name='status'], [name='query'], [name='scheduledOnly'], [name='retriedOnly']">
-                    Cancel filtered
-                </button>
-                <div class="flex flex-wrap items-end gap-2 lg:ml-auto">
+
+            <!-- Stats Container (Auto-refreshes every 5s) -->
+            <div id="stats-container" hx-get="/jobq/htmx/stats"
+                hx-trigger="load, jobq-refresh from:body, every 5s [!document.hidden && document.getElementById('jobq-auto-refresh') && document.getElementById('jobq-auto-refresh').checked]"
+                hx-include="[name='status']">
+                <!-- Rendered by Server -->
+            </div>
+
+            <div class="grid gap-4 xl:grid-cols-[minmax(0,1.3fr)_minmax(20rem,0.9fr)]">
+                <section class="glass-panel rounded-2xl border border-slate-800/70 p-5">
+                    <div class="flex flex-col gap-1 sm:flex-row sm:items-start sm:justify-between">
+                        <div>
+                            <p class="text-[11px] uppercase tracking-[0.24em] text-slate-500">Find jobs</p>
+                            <h3 class="mt-1 text-lg font-semibold text-slate-100">Filter the execution log</h3>
+                            <p class="mt-1 text-sm text-slate-400">Start with a search, then narrow by status, ordering, or retry/schedule flags.</p>
+                        </div>
+                        <div class="mt-3 flex flex-wrap items-center gap-2 sm:mt-0">
+                            <button type="button"
+                                class="rounded-lg border border-slate-700 bg-slate-900/70 px-3 py-2 text-sm text-slate-200 transition hover:bg-slate-800"
+                                onclick="jobqRefresh(false)">
+                                Refresh log
+                            </button>
+                            <button type="button"
+                                class="rounded-lg border border-indigo-500/60 bg-indigo-600/90 px-3 py-2 text-sm text-white transition hover:bg-indigo-500"
+                                onclick="jobqClearFilters()">
+                                Reset filters
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="mt-5 grid gap-4 lg:grid-cols-[minmax(0,1.15fr)_minmax(16rem,0.85fr)]">
+                        <div class="space-y-4">
+                            <div>
+                                <label class="mb-1 block text-[11px] uppercase tracking-wider text-slate-500">Search</label>
+                                <input type="text" name="queryInput" placeholder="Search by type, group, key, status, error, or full UUID"
+                                    class="w-full rounded-xl border border-slate-700 bg-slate-900 px-4 py-3 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500/60"
+                                    oninput="jobqSetQuery(this.value);jobqHandleSearchInput()"
+                                    onkeydown="if(event.key==='Enter'){event.preventDefault();jobqSetQuery(this.value);jobqRefresh(true)}">
+                                <p class="mt-2 text-xs text-slate-500">Example: <span class="font-mono">send-welcome-email</span>, a replace key, or a failure message fragment.</p>
+                            </div>
+
+                            <div class="rounded-xl border border-slate-800 bg-slate-950/35 p-4">
+                                <div class="mb-3 flex flex-wrap items-center gap-2">
+                                    <span class="text-[11px] uppercase tracking-[0.24em] text-slate-500">Quick toggles</span>
+                                    <span class="text-xs text-slate-500">Apply instantly</span>
+                                </div>
+                                <div class="flex flex-wrap gap-3">
+                                    <label class="inline-flex items-center gap-2 rounded-full border border-slate-800 bg-slate-900/70 px-3 py-2 text-sm text-slate-300 cursor-pointer">
+                                        <input type="checkbox" name="scheduledOnly" value="true" class="rounded border-slate-600 bg-slate-900 text-indigo-500"
+                                            onchange="jobqRefresh(true)">
+                                        <span>Scheduled only</span>
+                                    </label>
+                                    <label class="inline-flex items-center gap-2 rounded-full border border-slate-800 bg-slate-900/70 px-3 py-2 text-sm text-slate-300 cursor-pointer">
+                                        <input type="checkbox" name="retriedOnly" value="true" class="rounded border-slate-600 bg-slate-900 text-indigo-500"
+                                            onchange="jobqRefresh(true)">
+                                        <span>Retried only</span>
+                                    </label>
+                                    <label class="inline-flex items-center gap-2 rounded-full border border-slate-800 bg-slate-900/70 px-3 py-2 text-sm text-slate-300 cursor-pointer">
+                                        <input id="jobq-auto-refresh" type="checkbox" checked class="rounded border-slate-600 bg-slate-900 text-indigo-500"
+                                            onchange="if(this.checked){jobqRefresh(false)}">
+                                        <span>Auto refresh</span>
+                                    </label>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="space-y-4">
+                            <div class="grid gap-4 sm:grid-cols-2">
+                                <div>
+                                    <label class="mb-1 block text-[11px] uppercase tracking-wider text-slate-500">Status</label>
+                                    <select name="statusFilter"
+                                        class="w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-3 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500/60"
+                                        onchange="document.querySelectorAll('input[name=status]').forEach(e=>e.value=this.value);jobqRefresh(true)">
+                                        <option value="">All</option>
+                                        <option value="PENDING">Pending</option>
+                                        <option value="PROCESSING">Processing</option>
+                                        <option value="COMPLETED">Completed</option>
+                                        <option value="FAILED">Failed</option>
+                                        <option value="CANCELLED">Cancelled</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label class="mb-1 block text-[11px] uppercase tracking-wider text-slate-500">Page size</label>
+                                    <select name="size"
+                                        class="w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-3 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500/60"
+                                        onchange="jobqRefresh(true)">
+                                        <option value="25">25</option>
+                                        <option value="50" selected>50</option>
+                                        <option value="100">100</option>
+                                        <option value="200">200</option>
+                                    </select>
+                                </div>
+                            </div>
+
+                            <div>
+                                <label class="mb-1 block text-[11px] uppercase tracking-wider text-slate-500">Sort order</label>
+                                <select name="sort"
+                                    class="w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-3 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500/60"
+                                    onchange="jobqRefresh(true)">
+                                    <option value="created-desc">Newest first</option>
+                                    <option value="created-asc">Oldest first</option>
+                                    <option value="run-at-asc">Run time soonest</option>
+                                    <option value="run-at-desc">Run time latest</option>
+                                    <option value="priority-desc">Priority high</option>
+                                    <option value="priority-asc">Priority low</option>
+                                    <option value="retry-desc">Most retries</option>
+                                    <option value="failed-desc">Latest failed</option>
+                                    <option value="type-asc">Type A-Z</option>
+                                    <option value="type-desc">Type Z-A</option>
+                                </select>
+                            </div>
+
+                            <div class="rounded-xl border border-slate-800 bg-slate-950/35 p-4">
+                                <p class="text-[11px] uppercase tracking-[0.24em] text-slate-500">Saved views</p>
+                                <div class="mt-3 flex flex-col gap-2 sm:flex-row">
+                                    <select id="jobq-saved-views"
+                                        class="w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-3 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500/60"
+                                        onchange="jobqApplySavedView(this.value)">
+                                        <option value="">Choose a saved view</option>
+                                    </select>
+                                    <button type="button"
+                                        class="rounded-xl border border-slate-700 bg-slate-900/70 px-4 py-3 text-sm text-slate-200 transition hover:bg-slate-800"
+                                        onclick="jobqSaveCurrentView()">
+                                        Save current view
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <details class="group glass-panel rounded-2xl border border-slate-800/70 p-5" data-jobq-write>
+                    <summary class="cursor-pointer">
+                        <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                            <div>
+                                <p class="text-[11px] uppercase tracking-[0.24em] text-slate-500">Batch actions</p>
+                                <h3 class="mt-1 text-lg font-semibold text-slate-100">Recovery and bulk operations</h3>
+                                <p class="mt-1 text-sm text-slate-400">Use when you need to rerun, force-run, or cancel many jobs at once.</p>
+                            </div>
+                            <div class="flex items-center gap-2 rounded-xl border border-slate-800 bg-slate-950/45 px-3 py-2">
+                                <span id="jobq-selected-count" class="text-sm font-medium text-slate-200">0 selected</span>
+                                <span class="text-xs text-slate-500">across pages</span>
+                                <svg class="h-4 w-4 text-slate-500 transition group-open:rotate-180" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path>
+                                </svg>
+                            </div>
+                        </div>
+                    </summary>
+
+                    <div class="mt-5 space-y-4 border-t border-slate-800/70 pt-5">
+                        <div class="flex flex-wrap items-center gap-2 rounded-xl border border-slate-800 bg-slate-950/35 px-3 py-3">
+                            <span class="text-sm text-slate-300">Selected jobs stay remembered across pages.</span>
+                            <button id="jobq-clear-selection" type="button"
+                                class="rounded-lg border border-slate-700 px-3 py-2 text-xs text-slate-300 transition hover:bg-slate-800 disabled:opacity-50"
+                                onclick="jobqClearSelection()" disabled>
+                                Clear selection
+                            </button>
+                        </div>
+
+                        <div class="grid gap-3 sm:grid-cols-2">
+                            <button id="jobq-rerun-selected" type="button"
+                                data-jobq-write
+                                class="rounded-xl border border-indigo-500/60 bg-indigo-600 px-4 py-3 text-sm text-white transition hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-50"
+                                hx-post="/jobq/htmx/jobs/rerun-selected"
+                                hx-target="#jobq-action-feedback"
+                                hx-swap="innerHTML"
+                                hx-indicator="#jobq-loading-indicator"
+                                hx-include="[name='selectedIds']"
+                                disabled>
+                                Rerun selected terminal jobs
+                            </button>
+                            <button type="button"
+                                data-jobq-write
+                                class="rounded-xl border border-emerald-500/60 bg-emerald-600/90 px-4 py-3 text-sm text-white transition hover:bg-emerald-500"
+                                hx-post="/jobq/htmx/jobs/rerun-filtered"
+                                hx-target="#jobq-action-feedback"
+                                hx-swap="innerHTML"
+                                hx-indicator="#jobq-loading-indicator"
+                                hx-include="[name='status'], [name='query'], [name='scheduledOnly'], [name='retriedOnly']">
+                                Rerun all filtered jobs
+                            </button>
+                            <button type="button"
+                                data-jobq-write
+                                class="rounded-xl border border-blue-500/60 bg-blue-600/90 px-4 py-3 text-sm text-white transition hover:bg-blue-500"
+                                hx-post="/jobq/htmx/jobs/run-filtered-now"
+                                hx-target="#jobq-action-feedback"
+                                hx-swap="innerHTML"
+                                hx-indicator="#jobq-loading-indicator"
+                                hx-include="[name='status'], [name='query'], [name='scheduledOnly'], [name='retriedOnly']">
+                                Run delayed filtered jobs now
+                            </button>
+                            <button type="button"
+                                data-jobq-write
+                                class="rounded-xl border border-slate-600 bg-slate-700 px-4 py-3 text-sm text-white transition hover:bg-slate-600"
+                                hx-post="/jobq/htmx/jobs/cancel-filtered"
+                                hx-target="#jobq-action-feedback"
+                                hx-swap="innerHTML"
+                                hx-indicator="#jobq-loading-indicator"
+                                hx-include="[name='status'], [name='query'], [name='scheduledOnly'], [name='retriedOnly']">
+                                Cancel filtered jobs
+                            </button>
+                        </div>
+
+                        <div class="rounded-xl border border-rose-500/15 bg-rose-950/10 p-4">
+                            <div class="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+                                <div>
+                                    <p class="text-[11px] uppercase tracking-[0.24em] text-rose-300/70">Failed job recovery</p>
+                                    <h4 class="mt-1 text-base font-semibold text-slate-100">Rerun failed jobs from a specific time window</h4>
+                                    <p class="mt-1 text-sm text-slate-400">Useful after an outage or when a dependency came back.</p>
+                                </div>
+                                <div class="flex items-center gap-1">
+                                    <button type="button"
+                                        class="rounded-lg border border-slate-700 px-2 py-1 text-xs text-slate-300 transition hover:bg-slate-800"
+                                        onclick="jobqSetFailedSincePreset(1)">
+                                        1h
+                                    </button>
+                                    <button type="button"
+                                        class="rounded-lg border border-slate-700 px-2 py-1 text-xs text-slate-300 transition hover:bg-slate-800"
+                                        onclick="jobqSetFailedSincePreset(24)">
+                                        24h
+                                    </button>
+                                    <button type="button"
+                                        class="rounded-lg border border-slate-700 px-2 py-1 text-xs text-slate-300 transition hover:bg-slate-800"
+                                        onclick="jobqSetFailedSincePreset(168)">
+                                        7d
+                                    </button>
+                                </div>
+                            </div>
+                            <div class="mt-4 flex flex-col gap-3 md:flex-row md:items-end">
+                                <div class="min-w-0 flex-1">
+                                    <label for="jobq-failed-since" class="mb-1 block text-[11px] uppercase tracking-wider text-slate-500">Failed since</label>
+                                    <input id="jobq-failed-since" name="failedSince" type="datetime-local"
+                                        class="w-full rounded-xl border border-slate-700 bg-slate-900 px-3 py-3 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500/60"
+                                        oninput="jobqSyncBatchActionState()">
+                                </div>
+                                <button type="button"
+                                    id="jobq-rerun-failed-since"
+                                    data-jobq-write
+                                    class="rounded-xl border border-rose-500/60 bg-rose-600/90 px-4 py-3 text-sm text-white transition hover:bg-rose-500 disabled:cursor-not-allowed disabled:opacity-50"
+                                    hx-post="/jobq/htmx/jobs/rerun-failed-since"
+                                    hx-target="#jobq-action-feedback"
+                                    hx-swap="innerHTML"
+                                    hx-indicator="#jobq-loading-indicator"
+                                    hx-include="[name='failedSince'], [name='query'], [name='retriedOnly']"
+                                    disabled>
+                                    Rerun failed jobs in window
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </details>
+            </div>
+
+            <!-- Jobs List Section -->
+            <div class="glass-panel rounded-2xl overflow-hidden flex flex-col h-[650px] relative shadow-2xl">
+
+                <div
+                    class="flex flex-col gap-3 border-b border-slate-800/60 bg-slate-900/40 px-6 py-4 backdrop-blur-md sm:flex-row sm:items-center sm:justify-between">
                     <div>
-                        <label for="jobq-failed-since" class="block text-[11px] uppercase tracking-wider text-slate-500 mb-1">Failed Since</label>
-                        <input id="jobq-failed-since" name="failedSince" type="datetime-local"
-                            class="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500/60"
-                            oninput="jobqSyncBatchActionState()">
+                        <h3 class="font-semibold text-lg text-slate-100 tracking-tight">Job log</h3>
+                        <p class="mt-1 text-sm text-slate-400">Live list of jobs matching the current monitoring filters.</p>
                     </div>
-                    <div class="flex items-center gap-1 pb-[2px]">
-                        <button type="button"
-                            class="px-2 py-1 rounded-md border border-slate-700 text-slate-300 text-xs hover:bg-slate-800 transition"
-                            onclick="jobqSetFailedSincePreset(1)">
-                            1h
-                        </button>
-                        <button type="button"
-                            class="px-2 py-1 rounded-md border border-slate-700 text-slate-300 text-xs hover:bg-slate-800 transition"
-                            onclick="jobqSetFailedSincePreset(24)">
-                            24h
-                        </button>
-                        <button type="button"
-                            class="px-2 py-1 rounded-md border border-slate-700 text-slate-300 text-xs hover:bg-slate-800 transition"
-                            onclick="jobqSetFailedSincePreset(168)">
-                            7d
-                        </button>
-                    </div>
-                    <button type="button"
-                        id="jobq-rerun-failed-since"
-                        data-jobq-write
-                        class="px-3 py-2 rounded-lg bg-rose-600/90 border border-rose-500/60 text-white text-sm hover:bg-rose-500 transition disabled:opacity-50 disabled:cursor-not-allowed"
-                        hx-post="/jobq/htmx/jobs/rerun-failed-since"
-                        hx-target="#jobq-action-feedback"
-                        hx-swap="innerHTML"
-                        hx-indicator="#jobq-loading-indicator"
-                        hx-include="[name='failedSince'], [name='query'], [name='retriedOnly']"
-                        disabled>
-                        Rerun failed since
-                    </button>
-                </div>
-            </div>
-        </div>
-
-        <!-- Jobs List Section -->
-        <div class="glass-panel rounded-2xl overflow-hidden flex flex-col h-[650px] relative shadow-2xl">
-
-            <div
-                class="px-6 py-4 border-b border-slate-800/60 bg-slate-900/40 flex justify-between items-center backdrop-blur-md">
-                <h2 class="font-semibold text-lg text-slate-100 tracking-tight">Job Execution Log</h2>
-                <div id="pagination-controls" class="flex items-center gap-3 text-sm text-slate-400">
-                    <span id="jobq-page-label">Page 1</span>
-                    <div class="flex gap-1">
-                        <button id="jobq-page-prev"
-                            class="p-1.5 rounded bg-slate-800 border border-slate-700 hover:bg-slate-700 disabled:opacity-50 transition"
-                            type="button"
-                            onclick="jobqMovePage(-1)"
-                            disabled>
-                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"></path></svg>
-                        </button>
-                        <button id="jobq-page-next"
-                            class="p-1.5 rounded bg-slate-800 border border-slate-700 hover:bg-slate-700 disabled:opacity-50 transition"
-                            type="button"
-                            onclick="jobqMovePage(1)"
-                            disabled>
-                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path></svg>
-                        </button>
+                    <div id="pagination-controls" class="flex items-center gap-3 text-sm text-slate-400">
+                        <span id="jobq-page-label">Page 1</span>
+                        <div class="flex gap-1">
+                            <button id="jobq-page-prev"
+                                class="p-1.5 rounded bg-slate-800 border border-slate-700 hover:bg-slate-700 disabled:opacity-50 transition"
+                                type="button"
+                                onclick="jobqMovePage(-1)"
+                                disabled>
+                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"></path></svg>
+                            </button>
+                            <button id="jobq-page-next"
+                                class="p-1.5 rounded bg-slate-800 border border-slate-700 hover:bg-slate-700 disabled:opacity-50 transition"
+                                type="button"
+                                onclick="jobqMovePage(1)"
+                                disabled>
+                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path></svg>
+                            </button>
+                        </div>
                     </div>
                 </div>
-            </div>
 
-            <!-- Table Container (Auto-refreshes every 5s) -->
-            <div class="overflow-y-auto flex-grow relative bg-slate-950/20">
-                <table class="w-full text-left text-sm whitespace-nowrap">
-                    <thead
-                        class="bg-slate-900/80 backdrop-blur-md sticky top-0 border-b border-slate-800 text-slate-400 font-medium z-0 text-xs uppercase tracking-wider">
-                        <tr>
-                            <th class="px-3 py-4 font-semibold">
-                                <input id="jobq-select-all" type="checkbox" class="rounded border-slate-600 bg-slate-900 text-indigo-500"
-                                    aria-label="Select all jobs on this page"
-                                    onchange="jobqToggleSelectAll(this)">
-                            </th>
-                            <th class="px-6 py-4 font-semibold">Status</th>
-                            <th class="px-6 py-4 font-semibold">Type</th>
-                            <th class="px-6 py-4 text-center font-semibold">Reliability</th>
-                            <th class="px-6 py-4 font-semibold">Group</th>
-                            <th class="px-6 py-4 font-semibold">Key</th>
-                            <th class="px-6 py-4 font-semibold">Timeline</th>
-                            <th class="px-6 py-4 font-semibold">Failure</th>
-                            <th class="px-6 py-4 font-semibold">Tracking ID</th>
-                            <th class="px-6 py-4 font-semibold text-right">Inspect</th>
-                        </tr>
-                    </thead>
-                    <tbody id="jobs-container" class="divide-y divide-slate-800/50" hx-get="/jobq/htmx/jobs"
-                        hx-trigger="load, jobq-refresh from:body, every 5s [!document.hidden && document.getElementById('jobq-auto-refresh') && document.getElementById('jobq-auto-refresh').checked]"
-                        hx-swap="innerHTML"
-                        hx-include="[name='status'], [name='page'], [name='size'], [name='query'], [name='sort'], [name='scheduledOnly'], [name='retriedOnly']">
-                        <!-- Rows rendered by Server -->
-                    </tbody>
-                </table>
+                <!-- Table Container (Auto-refreshes every 5s) -->
+                <div class="overflow-y-auto flex-grow relative bg-slate-950/20">
+                    <table class="w-full text-left text-sm whitespace-nowrap">
+                        <thead
+                            class="bg-slate-900/80 backdrop-blur-md sticky top-0 border-b border-slate-800 text-slate-400 font-medium z-0 text-xs uppercase tracking-wider">
+                            <tr>
+                                <th class="px-3 py-4 font-semibold">
+                                    <input id="jobq-select-all" type="checkbox" class="rounded border-slate-600 bg-slate-900 text-indigo-500"
+                                        aria-label="Select all jobs on this page"
+                                        onchange="jobqToggleSelectAll(this)">
+                                </th>
+                                <th class="px-6 py-4 font-semibold">Status</th>
+                                <th class="px-6 py-4 font-semibold">Type</th>
+                                <th class="px-6 py-4 text-center font-semibold">Reliability</th>
+                                <th class="px-6 py-4 font-semibold">Group</th>
+                                <th class="px-6 py-4 font-semibold">Key</th>
+                                <th class="px-6 py-4 font-semibold">Timeline</th>
+                                <th class="px-6 py-4 font-semibold">Failure</th>
+                                <th class="px-6 py-4 font-semibold">Tracking ID</th>
+                                <th class="px-6 py-4 font-semibold text-right">Inspect</th>
+                            </tr>
+                        </thead>
+                        <tbody id="jobs-container" class="divide-y divide-slate-800/50" hx-get="/jobq/htmx/jobs"
+                            hx-trigger="load, jobq-refresh from:body, every 5s [!document.hidden && document.getElementById('jobq-auto-refresh') && document.getElementById('jobq-auto-refresh').checked]"
+                            hx-swap="innerHTML"
+                            hx-include="[name='status'], [name='page'], [name='size'], [name='query'], [name='sort'], [name='scheduledOnly'], [name='retriedOnly']">
+                            <!-- Rows rendered by Server -->
+                        </tbody>
+                    </table>
+                </div>
             </div>
-        </div>
 
         </section>
 
         <section id="jobq-management" class="jobq-section-anchor mt-6 space-y-4" aria-labelledby="jobq-management-title">
-            <div class="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
+            <div class="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
                 <div>
-                    <h2 id="jobq-management-title" class="text-lg font-semibold text-slate-100 tracking-tight">JobQ Management</h2>
-                    <p class="text-xs uppercase tracking-wider text-slate-500">Metrics, queue controls, recurring schedules, nodes, and audit</p>
+                    <p class="text-[11px] font-mono uppercase tracking-[0.28em] text-cyan-300/70">Management workspace</p>
+                    <h2 id="jobq-management-title" class="mt-1 text-2xl font-semibold tracking-tight text-white">Operate queues and infrastructure</h2>
+                    <p class="mt-2 max-w-3xl text-sm text-slate-400">Everything below changes how JobQ runs: queue controls, recurring schedules, node health, metrics, and audit history.</p>
                 </div>
                 <div class="flex flex-wrap gap-2">
                     <button id="jobq-ops-tab-queues" type="button"
-                        class="px-3 py-2 rounded-lg border text-sm font-medium transition"
+                        class="rounded-xl border px-4 py-2.5 text-sm font-medium transition"
                         onclick="jobqSetOpsTab('queues')">
                         Queues
                     </button>
                     <button id="jobq-ops-tab-metrics" type="button"
-                        class="px-3 py-2 rounded-lg border text-sm font-medium transition"
+                        class="rounded-xl border px-4 py-2.5 text-sm font-medium transition"
                         onclick="jobqSetOpsTab('metrics')">
                         Metrics
                     </button>
                     <button id="jobq-ops-tab-recurring" type="button"
-                        class="px-3 py-2 rounded-lg border text-sm font-medium transition"
+                        class="rounded-xl border px-4 py-2.5 text-sm font-medium transition"
                         onclick="jobqSetOpsTab('recurring')">
                         Recurring
                     </button>
                     <button id="jobq-ops-tab-nodes" type="button"
-                        class="px-3 py-2 rounded-lg border text-sm font-medium transition"
+                        class="rounded-xl border px-4 py-2.5 text-sm font-medium transition"
                         onclick="jobqSetOpsTab('nodes')">
                         Nodes
                     </button>
                     <button id="jobq-ops-tab-audit" type="button"
-                        class="px-3 py-2 rounded-lg border text-sm font-medium transition"
+                        class="rounded-xl border px-4 py-2.5 text-sm font-medium transition"
                         onclick="jobqSetOpsTab('audit')">
                         Audit
                     </button>
+                </div>
+            </div>
+
+            <div class="glass-panel rounded-2xl border border-slate-800/70 px-5 py-4">
+                <p id="jobq-ops-eyebrow" class="text-[11px] uppercase tracking-[0.24em] text-slate-500">Queue control</p>
+                <div class="mt-2 flex flex-col gap-2 lg:flex-row lg:items-end lg:justify-between">
+                    <div>
+                        <h3 id="jobq-ops-title" class="text-lg font-semibold text-slate-100">Queues and dispatch</h3>
+                        <p id="jobq-ops-description" class="mt-1 text-sm text-slate-400">Inspect backlog, pause or resume flow, and narrow the queue view to the jobs that matter.</p>
+                    </div>
+                    <div class="rounded-full border border-slate-800 bg-slate-950/45 px-3 py-1.5 text-xs text-slate-400">
+                        Only the active management tab refreshes automatically.
+                    </div>
                 </div>
             </div>
 

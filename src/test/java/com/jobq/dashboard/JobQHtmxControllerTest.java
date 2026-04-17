@@ -32,14 +32,14 @@ import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
-import org.springframework.beans.factory.support.DefaultListableBeanFactory;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.support.DefaultListableBeanFactory;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.Pageable;
@@ -222,7 +222,8 @@ class JobQHtmxControllerTest {
         JobOperationsService operationsService = mock(JobOperationsService.class);
         JobTypeMetadataRegistry metadataRegistry = mock(JobTypeMetadataRegistry.class);
         DefaultListableBeanFactory beanFactory = new DefaultListableBeanFactory();
-        ObjectProvider<JobSignalPublisher> signalPublisherProvider = beanFactory.getBeanProvider(JobSignalPublisher.class);
+        ObjectProvider<JobSignalPublisher> signalPublisherProvider =
+                beanFactory.getBeanProvider(JobSignalPublisher.class);
         ObjectProvider<JobDashboardEventBus> dashboardEventBusProvider =
                 beanFactory.getBeanProvider(JobDashboardEventBus.class);
         JobQProperties properties = new JobQProperties();
@@ -248,7 +249,8 @@ class JobQHtmxControllerTest {
                 dashboardEventBusProvider);
         MockMvc localMockMvc = MockMvcBuilders.standaloneSetup(controller).build();
 
-        localMockMvc.perform(get("/jobq/htmx/nodes-panel"))
+        localMockMvc
+                .perform(get("/jobq/htmx/nodes-panel"))
                 .andExpect(status().isOk())
                 .andExpect(content().string(containsString("Worker Nodes")))
                 .andExpect(content().string(containsString("node-123")))
@@ -680,7 +682,8 @@ class JobQHtmxControllerTest {
                         new JobOperationsService.QueueStats(
                                 "controlled", 0, 0, 0, 0, 0, null, null, true, 2, null, null, false)));
 
-        controllerMockMvc.perform(get("/jobq/htmx/queues-panel"))
+        controllerMockMvc
+                .perform(get("/jobq/htmx/queues-panel"))
                 .andExpect(status().isOk())
                 .andExpect(content().string(containsString("active")))
                 .andExpect(content().string(containsString("controlled")))
@@ -688,7 +691,8 @@ class JobQHtmxControllerTest {
                         .string(containsString("Queues with active work, failures, controls, or cron schedules")))
                 .andExpect(content().string(not(containsString("completed-only"))));
 
-        controllerMockMvc.perform(get("/jobq/htmx/queues-panel").param("queueScope", "all"))
+        controllerMockMvc
+                .perform(get("/jobq/htmx/queues-panel").param("queueScope", "all"))
                 .andExpect(status().isOk())
                 .andExpect(content().string(containsString("All registered job types")))
                 .andExpect(content().string(containsString("completed-only")));
@@ -725,10 +729,12 @@ class JobQHtmxControllerTest {
                         2,
                         1,
                         List.of(
-                                new JobOperationsService.MetricsPoint(OffsetDateTime.now().minusMinutes(30), 3, 1, 0),
+                                new JobOperationsService.MetricsPoint(
+                                        OffsetDateTime.now().minusMinutes(30), 3, 1, 0),
                                 new JobOperationsService.MetricsPoint(OffsetDateTime.now(), 4, 0, 1))));
 
-        controllerMockMvc.perform(get("/jobq/htmx/metrics-panel"))
+        controllerMockMvc
+                .perform(get("/jobq/htmx/metrics-panel"))
                 .andExpect(status().isOk())
                 .andExpect(content().string(containsString("Failure rate")))
                 .andExpect(content().string(containsString("Queue p50")))

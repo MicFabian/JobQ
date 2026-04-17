@@ -1,6 +1,7 @@
 package com.jobq;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -71,7 +72,7 @@ class JobClientValidationTest {
             if (annotation != null) {
                 String configuredType =
                         annotation.value() == null ? "" : annotation.value().trim();
-                return configuredType.isEmpty() ? jobClass.getName() : configuredType;
+                return configuredType.isEmpty() ? jobClass.getSimpleName() : configuredType;
             }
             throw new IllegalArgumentException("No job type mapping for " + jobClass.getName());
         });
@@ -99,12 +100,11 @@ class JobClientValidationTest {
     @Test
     void shouldRejectAnnotatedButUnregisteredJobClassWhenEnqueueingByClass() {
         when(jobTypeMetadataRegistry.jobTypeFor(UnregisteredAnnotatedJob.class))
-                .thenThrow(new IllegalArgumentException(
-                        "Job class " + UnregisteredAnnotatedJob.class.getName()
-                                + " has @Job but is not registered as a Spring bean."));
+                .thenThrow(new IllegalArgumentException("Job class " + UnregisteredAnnotatedJob.class.getName()
+                        + " has @Job but is not registered as a Spring bean."));
 
-        IllegalArgumentException error =
-                assertThrows(IllegalArgumentException.class, () -> jobClient.enqueue(UnregisteredAnnotatedJob.class, "payload"));
+        IllegalArgumentException error = assertThrows(
+                IllegalArgumentException.class, () -> jobClient.enqueue(UnregisteredAnnotatedJob.class, "payload"));
 
         assertTrue(error.getMessage().contains("not registered as a Spring bean"));
         verifyNoInteractions(jobRepository);
@@ -132,8 +132,7 @@ class JobClientValidationTest {
 
     @Test
     void shouldRejectUnknownJobTypeWhenRegistryHasKnownTypes() {
-        when(jobTypeMetadataRegistry.registeredJobTypes())
-                .thenReturn(Set.of("KNOWN_JOB", ClassBasedJob.class.getName()));
+        when(jobTypeMetadataRegistry.registeredJobTypes()).thenReturn(Set.of("KNOWN_JOB", "CLASS_BASED_JOB"));
 
         IllegalArgumentException error =
                 assertThrows(IllegalArgumentException.class, () -> jobClient.enqueue("UNKNOWN_JOB", "payload"));
@@ -211,6 +210,23 @@ class JobClientValidationTest {
     }
 
     @Test
+    void shouldResolveTypeFromJobClassWhenEnqueueingAtByClassWithSchedulingAndGroupingOptions() {
+        Instant requestedRunAt = Instant.now().plusSeconds(30);
+
+        jobClient.enqueueAt(ClassBasedJob.class, "payload", 5, "group-a", null, requestedRunAt);
+
+        ArgumentCaptor<Job> jobCaptor = ArgumentCaptor.forClass(Job.class);
+        verify(jobRepository).save(jobCaptor.capture());
+        Job saved = jobCaptor.getValue();
+
+        assertEquals("CLASS_BASED_JOB", saved.getType());
+        assertEquals(5, saved.getMaxRetries());
+        assertEquals("group-a", saved.getGroupId());
+        assertNull(saved.getReplaceKey());
+        assertEquals(OffsetDateTime.ofInstant(requestedRunAt, ZoneOffset.UTC), saved.getRunAt());
+    }
+
+    @Test
     void shouldFallbackToClassNameWhenJobAnnotationValueIsOmitted() {
         jobClient.enqueue(ClassNameFallbackJob.class, "payload");
 
@@ -218,7 +234,7 @@ class JobClientValidationTest {
         verify(jobRepository).save(jobCaptor.capture());
         Job saved = jobCaptor.getValue();
 
-        assertEquals(ClassNameFallbackJob.class.getName(), saved.getType());
+        assertEquals(ClassNameFallbackJob.class.getSimpleName(), saved.getType());
     }
 
     @Test
@@ -263,6 +279,28 @@ class JobClientValidationTest {
                         anyString(),
                         org.mockito.ArgumentMatchers.<Collection<Object>>any(),
                         eq(3),
+                        org.mockito.ArgumentMatchers.<ParameterizedPreparedStatementSetter<Object>>any());
+    }
+
+    @Test
+    void shouldBatchEnqueueUsingResolvedClassTypeAndOffsetDateTime() {
+        when(jdbcTemplate.batchUpdate(
+                        anyString(),
+                        org.mockito.ArgumentMatchers.<Collection<Object>>any(),
+                        anyInt(),
+                        org.mockito.ArgumentMatchers.<ParameterizedPreparedStatementSetter<Object>>any()))
+                .thenReturn(new int[][] {{1, 1}});
+
+        jobClient.enqueueAllAt(
+                ClassBasedJob.class,
+                List.of("a", "b"),
+                OffsetDateTime.now().plusMinutes(1).withNano(0));
+
+        verify(jdbcTemplate)
+                .batchUpdate(
+                        anyString(),
+                        org.mockito.ArgumentMatchers.<Collection<Object>>any(),
+                        eq(2),
                         org.mockito.ArgumentMatchers.<ParameterizedPreparedStatementSetter<Object>>any());
     }
 
